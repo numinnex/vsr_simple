@@ -1,5 +1,11 @@
-use crate::{client_table::ClientTable, message::Message, replica_config::ReplicaConfig, status::Status, Op};
-use std::{cell::RefCell, collections::HashMap, sync::atomic::{AtomicUsize, Ordering}};
+use crate::{
+    client_table::ClientTable, message::Message, replica_config::ReplicaConfig, status::Status, Op,
+};
+use std::{
+    cell::RefCell,
+    collections::{hash_map::Entry, HashMap},
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 pub struct Replica {
     pub id: usize,
@@ -12,7 +18,7 @@ pub struct Replica {
     pub op_number: AtomicUsize,
     pub commit_number: AtomicUsize,
 
-    acks: RefCell<HashMap<usize, usize>>
+    acks: RefCell<HashMap<usize, usize>>,
 }
 
 impl Replica {
@@ -28,6 +34,19 @@ impl Replica {
             commit_number: Default::default(),
             acks: Default::default(),
         }
+    }
+
+    pub fn quorum(&self) -> usize {
+        let replicas_count = self.config.replicas.len();
+        replicas_count / 2 + 1
+    }
+
+    pub fn ack_op(&self, op_number: usize) {
+        self.acks
+            .borrow_mut()
+            .entry(op_number)
+            .and_modify(|ack| *ack += 1)
+            .or_insert(1);
     }
 
     pub fn is_primary(&self) -> bool {
@@ -84,7 +103,23 @@ impl Replica {
     }
 }
 
+// Handlers
 impl Replica {
+    fn on_request(&self, client_id: usize, request_number: usize, op: Op) {
+        assert!(self.is_primary());
+        if self.status != Status::Normal {
+            // TODO: Impl mechanism that teaches client to try again later on.
+            return;
+        }
+        // Check in client table, whether the request_number is subsequent.
+        // If it's smaller, drop the request (duplicate)
+        // If it's equal to current request_number, resend the response.
+
+        // Append to log.
+        self.append_to_log(op);
+        // Send `Prepare` message to backups.
+    }
+
     fn on_prepare(&self, view_number: usize, op_number: usize, op: Op, commit_number: usize) {
         assert!(!self.is_primary());
         if self.view_number != view_number {
@@ -112,7 +147,31 @@ impl Replica {
         assert!(self.is_primary());
         assert_eq!(self.view_number, view_number);
 
-        // Ack the op,
+        self.ack_op(op_number);
+        if *self.acks.borrow().get(&op_number).unwrap() == self.quorum() {
+            // Commit op
+            // Send response to the client.
+        }
+    }
 
+    fn on_commit(&self, view_number: usize, commit_number: usize) {
+        if self.status != Status::Normal {
+            return;
+        }
+        if view_number < self.view_number {
+            return;
+        }
+        assert_eq!(self.status, Status::Normal);
+        assert_eq!(self.view_number, view_number);
+
+        let current_commit_number = self.commit_number.load(Ordering::Acquire);
+        if commit_number > current_commit_number{
+            // Perform state transfer
+            return;
+        }
+
+        for op_idx in current_commit_number..commit_number {
+            // Commit the op
+        }
     }
 }

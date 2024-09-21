@@ -3,6 +3,7 @@ pub(crate) mod message;
 pub(crate) mod replica;
 pub(crate) mod replica_config;
 pub(crate) mod status;
+pub(crate) mod log;
 
 #[derive(Clone)]
 pub(crate) enum Op {
