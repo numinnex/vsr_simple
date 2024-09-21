@@ -12,4 +12,9 @@ impl ReplicaConfig {
             replicas: Default::default(),
         }
     }
+
+    pub fn primary_id(&self, view_number: usize) -> usize {
+        let idx = view_number % self.replicas.len();
+        self.replicas[idx]
+    }
 }
