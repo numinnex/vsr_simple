@@ -1,9 +1,9 @@
 use crate::{
-    client_table::ClientTable, message::Message, replica_config::ReplicaConfig, status::Status, Op,
+    client_table::ClientTable, message::Message, replica_config::ReplicaConfig, status::Status, stm::StateMachine, Op
 };
 use std::{
     cell::RefCell,
-    collections::{hash_map::Entry, HashMap},
+    collections::HashMap,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -12,13 +12,14 @@ pub struct Replica {
     pub status: Status,
     pub config: ReplicaConfig,
     pub clients_table: ClientTable,
-    // TODO: Add state-machine
-    pub log: Vec<Op>,
+    //TODO: Op should be reference counted.
+    pub log: RefCell<Vec<Op>>,
     pub view_number: usize,
     pub op_number: AtomicUsize,
     pub commit_number: AtomicUsize,
 
     acks: RefCell<HashMap<usize, usize>>,
+    stm: StateMachine,
 }
 
 impl Replica {
@@ -33,12 +34,25 @@ impl Replica {
             op_number: Default::default(),
             commit_number: Default::default(),
             acks: Default::default(),
+            stm: Default::default(),
         }
     }
 
-    pub fn quorum(&self) -> usize {
+    fn quorum(&self) -> usize {
         let replicas_count = self.config.replicas.len();
         replicas_count / 2 + 1
+    }
+
+    pub fn quorum_for_op(&self, op_number: usize) -> bool {
+        let acks = *self.acks.borrow().get(&op_number).unwrap();
+        acks == self.quorum()
+    }
+
+    pub fn commit_op(&self, op_number: usize) {
+        let log = self.log.borrow();
+        let op = &log[op_number];
+        self.stm.apply(op.clone());
+        self.commit_number.fetch_add(1, Ordering::AcqRel);
     }
 
     pub fn ack_op(&self, op_number: usize) {
@@ -67,6 +81,7 @@ impl Replica {
                 // Check if you are primary, otherwise drop the message.
                 // Increment op-number.
                 // Send `Prepare` message to other replicas.
+                self.on_request(client_id, request_number, op);
             }
             Message::Prepare {
                 view_number,
@@ -89,6 +104,7 @@ impl Replica {
                 // Increment the commit-number.
                 // Reply to the client.
                 // Update clients table.
+                self.on_prepare_ok(view_number, op_number);
             }
             Message::Commit {
                 view_number,
@@ -98,6 +114,7 @@ impl Replica {
                 // Call the service code (app logic).
                 // Increment the commit-number.
                 // Update clients table.
+                self.on_commit(view_number, commit_number);
             }
         }
     }
@@ -137,8 +154,10 @@ impl Replica {
         }
 
         // Append op to the log.
-        for op_idx in self.commit_number()..commit_number {
+        self.append_to_log(op);
+        for op_number in self.commit_number()..commit_number {
             // Commit op
+            self.commit_op(op_number);
         }
         // Send message back to primary.
     }
@@ -148,8 +167,9 @@ impl Replica {
         assert_eq!(self.view_number, view_number);
 
         self.ack_op(op_number);
-        if *self.acks.borrow().get(&op_number).unwrap() == self.quorum() {
+        if self.quorum_for_op(op_number) {
             // Commit op
+            self.commit_op(op_number);
             // Send response to the client.
         }
     }
@@ -165,13 +185,14 @@ impl Replica {
         assert_eq!(self.view_number, view_number);
 
         let current_commit_number = self.commit_number.load(Ordering::Acquire);
-        if commit_number > current_commit_number{
+        if commit_number > current_commit_number {
             // Perform state transfer
             return;
         }
 
-        for op_idx in current_commit_number..commit_number {
+        for op_number in current_commit_number..commit_number {
             // Commit the op
+            self.commit_op(op_number);
         }
     }
 }

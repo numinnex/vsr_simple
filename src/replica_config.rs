@@ -1,16 +1,15 @@
 use std::net::IpAddr;
 
+#[derive(Default)]
 pub struct ReplicaConfig {
     pub addresses: Vec<IpAddr>,
     pub replicas: Vec<usize>,
 }
 
 impl ReplicaConfig {
-    pub fn new() -> Self {
-        Self {
-            addresses: Default::default(),
-            replicas: Default::default(),
-        }
+    pub fn append_new(&mut self, address: IpAddr, id: usize) {
+        self.addresses.push(address);
+        self.replicas.push(id);
     }
 
     pub fn primary_id(&self, view_number: usize) -> usize {
