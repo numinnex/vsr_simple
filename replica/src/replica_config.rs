@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ReplicaConfig {
     pub addresses: Vec<SocketAddr>,
     pub replicas: Vec<usize>,

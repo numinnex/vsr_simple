@@ -15,7 +15,7 @@ pub struct Replica {
     pub status: Status,
     pub config: ReplicaConfig,
     pub clients_table: ClientTable,
-    //TODO: Op should be reference counted.
+    //TODO: Op in the log should be ref counted.
     pub log: RefCell<Vec<Op>>,
     pub view_number: usize,
     pub op_number: AtomicUsize,
@@ -102,7 +102,7 @@ impl Replica {
                 view_number,
                 op_number,
             } => {
-                // Check if received a qourum of `PrepareOk`
+                // Check if received a quorum of `PrepareOk`
                 // Call the service code (app logic).
                 // Increment the commit-number.
                 // Reply to the client.

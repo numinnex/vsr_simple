@@ -14,7 +14,9 @@ impl StateMachine {
                 let mut inner = self.inner.borrow_mut();
                 *inner += val;
             }
-            _ => {}
+            Op::Nop => {
+                println!("Applying No operation to state machine");
+            }
         }
     }
 }
