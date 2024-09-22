@@ -1,5 +1,6 @@
 use std::cell::RefCell;
-use crate::Op;
+
+use client::Op;
 
 #[derive(Default)]
 pub struct StateMachine {
@@ -13,7 +14,7 @@ impl StateMachine {
                 let mut inner = self.inner.borrow_mut();
                 *inner += val;
             }
-            _ => {},
+            _ => {}
         }
     }
 }

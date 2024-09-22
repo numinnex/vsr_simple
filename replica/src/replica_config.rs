@@ -1,13 +1,13 @@
-use std::net::IpAddr;
+use std::net::SocketAddr;
 
 #[derive(Default)]
 pub struct ReplicaConfig {
-    pub addresses: Vec<IpAddr>,
+    pub addresses: Vec<SocketAddr>,
     pub replicas: Vec<usize>,
 }
 
 impl ReplicaConfig {
-    pub fn append_new(&mut self, address: IpAddr, id: usize) {
+    pub fn append_new(&mut self, address: SocketAddr, id: usize) {
         self.addresses.push(address);
         self.replicas.push(id);
     }

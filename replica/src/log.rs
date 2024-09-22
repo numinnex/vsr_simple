@@ -1,4 +1,6 @@
-use crate::{replica::Replica, Op};
+use client::Op;
+
+use crate::replica::Replica;
 use std::sync::atomic::Ordering;
 
 impl Replica {

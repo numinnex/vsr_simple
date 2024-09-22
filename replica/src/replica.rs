@@ -1,5 +1,8 @@
+use client::Op;
+
 use crate::{
-    client_table::ClientTable, message::Message, replica_config::ReplicaConfig, status::Status, stm::StateMachine, Op
+    client_table::ClientTable, message::Message, replica_config::ReplicaConfig, status::Status,
+    stm::StateMachine,
 };
 use std::{
     cell::RefCell,
