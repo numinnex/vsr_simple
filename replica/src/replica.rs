@@ -6,7 +6,9 @@ use crate::{
 };
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::{hash_map::Entry, HashMap},
+    io::Write,
+    net::TcpStream,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -23,6 +25,7 @@ pub struct Replica {
 
     acks: RefCell<HashMap<usize, usize>>,
     stm: StateMachine,
+    connections: RefCell<HashMap<usize, TcpStream>>,
 }
 
 impl Replica {
@@ -37,9 +40,35 @@ impl Replica {
             op_number: Default::default(),
             commit_number: Default::default(),
             acks: Default::default(),
+            connections: Default::default(),
             stm: Default::default(),
         }
     }
+
+    fn send_msg_to_replicas(&self, message: Message<Op>) {
+        let mut connections = self.connections.borrow_mut();
+        for (replica_id, stream) in connections.iter_mut() {
+            if *replica_id != self.id {
+                let bytes = message.to_bytes();
+                stream
+                    .write_all(&bytes)
+                    .expect("Failed to send message to replica");
+            }
+        }
+    }
+
+    pub fn on_new_node_join(&self, replica_id: usize) {
+        let mut connections = self.connections.borrow_mut();
+        match connections.entry(replica_id) {
+            Entry::Occupied(replica) => {
+                // TODO: tell the replica from this entry about our existence.
+            },
+            Entry::Vacant(entry) => {
+                // TODO: Add ourselves to the connection list and connect to ourselves ? 
+            }
+        }
+    }
+
 
     fn quorum(&self) -> usize {
         let replicas_count = self.config.replicas.len();
@@ -136,8 +165,18 @@ impl Replica {
         // If it's equal to current request_number, resend the response.
 
         // Append to log.
-        self.append_to_log(op);
+        self.append_to_log(op.clone());
         // Send `Prepare` message to backups.
+        let op_number = self.op_number.load(Ordering::Acquire);
+        let commit_number = self.commit_number();
+        let view_number = self.view_number;
+        let message = Message::Prepare {
+            view_number,
+            op,
+            op_number,
+            commit_number,
+        };
+        self.send_msg_to_replicas(message);
     }
 
     fn on_prepare(&self, view_number: usize, op_number: usize, op: Op, commit_number: usize) {

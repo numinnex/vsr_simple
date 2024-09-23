@@ -17,7 +17,10 @@ fn main() {
     // Assume that the first replica in the list is primary.
     let primary_addr = ADDRESSES[0];
     let mut stream = TcpStream::connect(primary_addr).unwrap();
-    let mut request_num = 0;
+    // Have to start from 1 since the starting request_number in client table is 0
+    // The protocol requires us to process requests only with strictly greater number
+    // than the one stored in clients table.
+    let mut request_num = 1;
     loop {
         let client = &mut client;
         let stream = &mut stream;

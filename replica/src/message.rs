@@ -50,4 +50,41 @@ impl Message<Op> {
             _ => unreachable!(),
         }
     }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let bytes = Vec::new();
+        match self {
+            Message::Request {
+                client_id,
+                request_number,
+                op,
+            } => {
+                let op_bytes = op.to_bytes();
+                let op_len = op_bytes.len();
+                let length = 1 + 8 + 8 + op_len;
+                let mut bytes = Vec::with_capacity(length + 4);
+                let discriminator = 1u8;
+                bytes.extend_from_slice(&(length as u32).to_le_bytes());
+                bytes.extend_from_slice(&discriminator.to_le_bytes());
+                bytes.extend_from_slice(&client_id.to_le_bytes());
+                bytes.extend_from_slice(&request_number.to_le_bytes());
+                bytes.extend_from_slice(&op_bytes);
+            }
+            Message::Prepare {
+                view_number,
+                op,
+                op_number,
+                commit_number,
+            } => todo!(),
+            Message::PrepareOk {
+                view_number,
+                op_number,
+            } => todo!(),
+            Message::Commit {
+                view_number,
+                commit_number,
+            } => todo!(),
+        }
+        bytes
+    }
 }

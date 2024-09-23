@@ -7,7 +7,7 @@ pub struct ReplicaConfig {
 }
 
 impl ReplicaConfig {
-    pub fn append_new(&mut self, address: SocketAddr, id: usize) {
+    pub fn append_new(&mut self, id: usize, address: SocketAddr) {
         self.addresses.push(address);
         self.replicas.push(id);
     }

@@ -11,7 +11,7 @@ pub enum Op {
 }
 
 impl Op {
-    pub fn to_bytes(self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         match self {
             Op::Nop => {
