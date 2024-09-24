@@ -1,3 +1,5 @@
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
 use client::Op;
 
 // Discriminator table (singular byte)
@@ -5,6 +7,7 @@ use client::Op;
 // 2 => Prepare
 // 3 => PrepareOk
 // 4 => Commit
+// 5 => NewNode
 // TODO: Add variants to handle state transfers.
 
 #[derive(Debug)]
@@ -28,6 +31,11 @@ pub enum Message<Op: Clone> {
         view_number: usize,
         commit_number: usize,
     },
+    NewNode {
+        replica_id: usize,
+        addr: SocketAddr,
+    }
+
     // TODO: Add variants to handle state tranfers.
 }
 
@@ -46,13 +54,22 @@ impl Message<Op> {
                     request_number,
                     op,
                 }
+            },
+            5 => {
+                let replica_id = usize::from_le_bytes(buf[1..9].try_into().unwrap());
+                let octets = u32::from_be_bytes(buf[9..13].try_into().unwrap());
+                let port = u16::from_le_bytes(buf[13..15].try_into().unwrap());
+                let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::from(octets)), port);
+                Message::NewNode {
+                    replica_id,
+                    addr
+                }
             }
             _ => unreachable!(),
         }
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        let bytes = Vec::new();
         match self {
             Message::Request {
                 client_id,
@@ -69,6 +86,7 @@ impl Message<Op> {
                 bytes.extend_from_slice(&client_id.to_le_bytes());
                 bytes.extend_from_slice(&request_number.to_le_bytes());
                 bytes.extend_from_slice(&op_bytes);
+                bytes
             }
             Message::Prepare {
                 view_number,
@@ -84,7 +102,24 @@ impl Message<Op> {
                 view_number,
                 commit_number,
             } => todo!(),
+            Message::NewNode { replica_id, addr } => {
+                let length = 1 + 8 + 4 + 2;
+                let mut bytes = Vec::with_capacity(length + 4);
+                let discriminator = 5u8;
+                let octets = match addr.ip() {
+                    IpAddr::V4(ipv4_addr) => {
+                        ipv4_addr.octets()
+                    },
+                    IpAddr::V6(_) => panic!("IpV6 not supported")
+                };
+                let port = addr.port().to_le_bytes();
+                bytes.extend_from_slice(&(length as u32).to_le_bytes());
+                bytes.extend_from_slice(&discriminator.to_le_bytes());
+                bytes.extend_from_slice(&replica_id.to_le_bytes());
+                bytes.extend_from_slice(&octets);
+                bytes.extend_from_slice(&port);
+                bytes
+            }
         }
-        bytes
     }
 }

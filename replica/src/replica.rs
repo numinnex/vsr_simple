@@ -7,8 +7,8 @@ use crate::{
 use std::{
     cell::RefCell,
     collections::{hash_map::Entry, HashMap},
-    io::Write,
-    net::TcpStream,
+    io::{Read, Write},
+    net::{SocketAddr, TcpStream},
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -47,6 +47,7 @@ impl Replica {
 
     fn send_msg_to_replicas(&self, message: Message<Op>) {
         let mut connections = self.connections.borrow_mut();
+        println!("trololo");
         for (replica_id, stream) in connections.iter_mut() {
             if *replica_id != self.id {
                 let bytes = message.to_bytes();
@@ -57,14 +58,22 @@ impl Replica {
         }
     }
 
-    pub fn on_new_node_join(&self, replica_id: usize) {
+    // Egh.. I'll have to seek for better patterns how to bootstrap a cluster.
+    pub fn new_node_joined(&self, replica_id: usize, addr: SocketAddr) {
         let mut connections = self.connections.borrow_mut();
-        match connections.entry(replica_id) {
-            Entry::Occupied(replica) => {
-                // TODO: tell the replica from this entry about our existence.
-            },
-            Entry::Vacant(entry) => {
-                // TODO: Add ourselves to the connection list and connect to ourselves ? 
+        let stream = TcpStream::connect(addr).expect("Failed to connect");
+        connections.insert(replica_id, stream);
+        for (id, address) in self.config.replicas.iter().zip(self.config.addresses.iter()) {
+            if *id != replica_id {
+                println!("lol");
+                let mut stream = TcpStream::connect(address).unwrap();
+                let message = Message::NewNode {
+                    replica_id,
+                    addr
+                };
+                let bytes = message.to_bytes();
+                stream.write_all(&bytes).unwrap();
+                connections.insert(*id, stream);
             }
         }
     }
@@ -147,6 +156,13 @@ impl Replica {
                 // Increment the commit-number.
                 // Update clients table.
                 self.on_commit(view_number, commit_number);
+            }
+            Message::NewNode { replica_id, addr } => {
+                // Add ourselves to the connections
+                let mut connections = self.connections.borrow_mut();
+                let mut stream = TcpStream::connect(addr).unwrap();
+                stream.write_all(&[]).unwrap();
+                connections.insert(replica_id, stream);
             }
         }
     }
