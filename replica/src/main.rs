@@ -21,8 +21,10 @@ fn main() {
     let mut threads = Vec::new();
 
     for (id, addr) in ADDRESSES.into_iter().enumerate() {
-        let config_mut = &mut config;
-        config_mut.append_new(id, addr);
+        config.append_new(id, addr);
+    }
+
+    for (id, addr) in ADDRESSES.into_iter().enumerate() {
         let config = config.clone();
         let thread = std::thread::spawn(move || {
             let replica = Rc::new(Replica::new(id, config));

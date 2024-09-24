@@ -53,6 +53,7 @@ impl Replica {
             .zip(self.config.addresses.iter())
         {
             if *replica_id != self.id {
+                println!("Sending message to replica with id: {}", replica_id);
                 let bytes = message.to_bytes();
                 let mut stream = TcpStream::connect(addr).unwrap();
                 stream
@@ -172,6 +173,8 @@ impl Replica {
     }
 
     fn on_prepare(&self, view_number: usize, op_number: usize, op: Op, commit_number: usize) {
+        println!("TROLOLOLO");
+        /*
         assert!(!self.is_primary());
         if self.view_number != view_number {
             // This means that our backup has felt behind during the `ViewChange` protocol.
@@ -194,6 +197,7 @@ impl Replica {
             self.commit_op(op_number);
         }
         // Send message back to primary.
+        */
     }
 
     fn on_prepare_ok(&self, view_number: usize, op_number: usize) {
