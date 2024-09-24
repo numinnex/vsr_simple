@@ -15,10 +15,10 @@ impl Op {
         let mut bytes = Vec::new();
         match self {
             Op::Nop => {
-                bytes.extend_from_slice(&0u8.to_le_bytes());
+                bytes.push(0);
             }
             Op::Add(value) => {
-                bytes.extend_from_slice(&1u8.to_le_bytes());
+                bytes.push(1);
                 bytes.extend_from_slice(&value.to_le_bytes());
             }
         };
@@ -38,8 +38,8 @@ impl Op {
     }
 }
 
-pub const ADDRESSES: [SocketAddr; 1] = [
+pub const ADDRESSES: [SocketAddr; 3] = [
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1337),
-    //SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 2137),
-    // SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6969),
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 2137),
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6969),
 ];

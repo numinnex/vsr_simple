@@ -7,7 +7,6 @@ use client::Op;
 // 2 => Prepare
 // 3 => PrepareOk
 // 4 => Commit
-// 5 => NewNode
 // TODO: Add variants to handle state transfers.
 
 #[derive(Debug)]
@@ -31,11 +30,6 @@ pub enum Message<Op: Clone> {
         view_number: usize,
         commit_number: usize,
     },
-    NewNode {
-        replica_id: usize,
-        addr: SocketAddr,
-    }
-
     // TODO: Add variants to handle state tranfers.
 }
 
@@ -53,16 +47,6 @@ impl Message<Op> {
                     client_id,
                     request_number,
                     op,
-                }
-            },
-            5 => {
-                let replica_id = usize::from_le_bytes(buf[1..9].try_into().unwrap());
-                let octets = u32::from_be_bytes(buf[9..13].try_into().unwrap());
-                let port = u16::from_le_bytes(buf[13..15].try_into().unwrap());
-                let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::from(octets)), port);
-                Message::NewNode {
-                    replica_id,
-                    addr
                 }
             }
             _ => unreachable!(),
@@ -102,24 +86,6 @@ impl Message<Op> {
                 view_number,
                 commit_number,
             } => todo!(),
-            Message::NewNode { replica_id, addr } => {
-                let length = 1 + 8 + 4 + 2;
-                let mut bytes = Vec::with_capacity(length + 4);
-                let discriminator = 5u8;
-                let octets = match addr.ip() {
-                    IpAddr::V4(ipv4_addr) => {
-                        ipv4_addr.octets()
-                    },
-                    IpAddr::V6(_) => panic!("IpV6 not supported")
-                };
-                let port = addr.port().to_le_bytes();
-                bytes.extend_from_slice(&(length as u32).to_le_bytes());
-                bytes.extend_from_slice(&discriminator.to_le_bytes());
-                bytes.extend_from_slice(&replica_id.to_le_bytes());
-                bytes.extend_from_slice(&octets);
-                bytes.extend_from_slice(&port);
-                bytes
-            }
         }
     }
 }

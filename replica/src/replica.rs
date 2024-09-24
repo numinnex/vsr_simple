@@ -25,7 +25,6 @@ pub struct Replica {
 
     acks: RefCell<HashMap<usize, usize>>,
     stm: StateMachine,
-    connections: RefCell<HashMap<usize, TcpStream>>,
 }
 
 impl Replica {
@@ -40,44 +39,28 @@ impl Replica {
             op_number: Default::default(),
             commit_number: Default::default(),
             acks: Default::default(),
-            connections: Default::default(),
             stm: Default::default(),
         }
     }
 
+    // Couldn't be bothered creating proper connections cache, instead just connect everytime
+    // a new request is being made to the replica.
     fn send_msg_to_replicas(&self, message: Message<Op>) {
-        let mut connections = self.connections.borrow_mut();
-        println!("trololo");
-        for (replica_id, stream) in connections.iter_mut() {
+        for (replica_id, addr) in self
+            .config
+            .replicas
+            .iter()
+            .zip(self.config.addresses.iter())
+        {
             if *replica_id != self.id {
                 let bytes = message.to_bytes();
+                let mut stream = TcpStream::connect(addr).unwrap();
                 stream
                     .write_all(&bytes)
                     .expect("Failed to send message to replica");
             }
         }
     }
-
-    // Egh.. I'll have to seek for better patterns how to bootstrap a cluster.
-    pub fn new_node_joined(&self, replica_id: usize, addr: SocketAddr) {
-        let mut connections = self.connections.borrow_mut();
-        let stream = TcpStream::connect(addr).expect("Failed to connect");
-        connections.insert(replica_id, stream);
-        for (id, address) in self.config.replicas.iter().zip(self.config.addresses.iter()) {
-            if *id != replica_id {
-                println!("lol");
-                let mut stream = TcpStream::connect(address).unwrap();
-                let message = Message::NewNode {
-                    replica_id,
-                    addr
-                };
-                let bytes = message.to_bytes();
-                stream.write_all(&bytes).unwrap();
-                connections.insert(*id, stream);
-            }
-        }
-    }
-
 
     fn quorum(&self) -> usize {
         let replicas_count = self.config.replicas.len();
@@ -156,13 +139,6 @@ impl Replica {
                 // Increment the commit-number.
                 // Update clients table.
                 self.on_commit(view_number, commit_number);
-            }
-            Message::NewNode { replica_id, addr } => {
-                // Add ourselves to the connections
-                let mut connections = self.connections.borrow_mut();
-                let mut stream = TcpStream::connect(addr).unwrap();
-                stream.write_all(&[]).unwrap();
-                connections.insert(replica_id, stream);
             }
         }
     }

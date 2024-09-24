@@ -20,8 +20,7 @@ fn main() {
     let mut config = ReplicaConfig::default();
     let mut threads = Vec::new();
 
-    for (id, addr) in ADDRESSES.into_iter().enumerate()
-    {
+    for (id, addr) in ADDRESSES.into_iter().enumerate() {
         let config_mut = &mut config;
         config_mut.append_new(id, addr);
         let config = config.clone();
@@ -29,7 +28,6 @@ fn main() {
             let replica = Rc::new(Replica::new(id, config));
             println!("Created node with addr: {}, id: {}", addr, id);
             let listener = TcpListener::bind(addr).expect("Failed to bind to socketerino");
-            replica.new_node_joined(id, addr);
             loop {
                 let replica = replica.clone();
                 match listener.accept() {
