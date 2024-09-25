@@ -21,7 +21,7 @@ fn main() {
     // The protocol requires us to process requests only with strictly greater number
     // than the one stored in clients table.
     let mut request_num = 1;
-    loop {
+    //loop {
         let client = &mut client;
         let stream = &mut stream;
         let value = generate_random_number();
@@ -32,7 +32,10 @@ fn main() {
         let bytes = request.to_bytes();
         let _ = stream.write(&bytes).unwrap();
         // TODO: Read the response
-        thread::sleep(Duration::from_millis(500));
+        //thread::sleep(Duration::from_millis(500));
+    //}
+    loop {
+
     }
 }
 

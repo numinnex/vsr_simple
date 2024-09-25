@@ -62,16 +62,19 @@ impl Replica {
                 stream
                     .write_all(&bytes)
                     .expect("Failed to send message to replica");
+                println!("written bytes");
                 let mut len_bytes = vec![0u8; 4];
                 stream
                     .read_exact(&mut len_bytes)
                     .expect("Failed to read response from replica.");
                 let length = u32::from_le_bytes(len_bytes.try_into().unwrap());
                 let mut buffer = vec![0u8; length as _];
+                println!("reading len: {}", length);
                 stream
                     .read_exact(&mut buffer)
                     .expect("Failed to read response from replica.");
                 let message = Message::parse_message(&buffer);
+                println!("Received message from replica: {:?}", message);
                 self.on_message(&mut stream, message);
             }
         }
@@ -84,6 +87,7 @@ impl Replica {
 
     pub fn quorum_for_op(&self, op_number: usize) -> bool {
         let acks = *self.acks.borrow().get(&op_number).unwrap();
+        println!("acks: {}, acks required for quorum: {}", acks, self.quorum());
         acks == self.quorum()
     }
 
@@ -231,8 +235,10 @@ impl Replica {
         assert!(self.is_primary());
         assert_eq!(self.view_number, view_number);
 
+        println!("on_prepare_ok");
         self.ack_op(op_number);
         if self.quorum_for_op(op_number) {
+            println!("quorum");
             // Commit op
             self.commit_op(op_number);
             // Send response to the client.

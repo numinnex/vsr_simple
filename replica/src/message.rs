@@ -101,7 +101,7 @@ impl Message<Op> {
                 let op_len = op_bytes.len();
                 let length = 1 + 8 + 8 + 8 + op_len;
                 let discriminator = 2u8;
-                let mut bytes = Vec::with_capacity(length);
+                let mut bytes = Vec::with_capacity(length + 4);
                 bytes.extend_from_slice(&(length as u32).to_le_bytes());
                 bytes.extend_from_slice(&discriminator.to_le_bytes());
                 bytes.extend_from_slice(&view_number.to_le_bytes());
@@ -116,7 +116,7 @@ impl Message<Op> {
             } => {
                 let length = 1 + 8 + 8;
                 let discriminator = 3u8;
-                let mut bytes = Vec::with_capacity(length);
+                let mut bytes = Vec::with_capacity(length + 4);
                 bytes.extend_from_slice(&(length as u32).to_le_bytes());
                 bytes.extend_from_slice(&discriminator.to_le_bytes());
                 bytes.extend_from_slice(&view_number.to_le_bytes());

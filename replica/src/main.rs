@@ -25,8 +25,9 @@ fn main() {
     }
 
     for (id, addr) in ADDRESSES.into_iter().enumerate() {
+        let builder = std::thread::Builder::new().name(format!("replica-{id}"));
         let config = config.clone();
-        let thread = std::thread::spawn(move || {
+        let thread = builder.spawn(move || {
             let replica = Rc::new(Replica::new(id, config));
             println!("Created node with addr: {}, id: {}", addr, id);
             let listener = TcpListener::bind(addr).expect("Failed to bind to socketerino");
@@ -41,23 +42,29 @@ fn main() {
                     }
                 }
             }
-        });
+        }).unwrap();
         threads.push(thread);
     }
     let _: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
 }
 
 fn handle_connection(stream: &mut TcpStream, replica: Rc<Replica>) {
+    let mut i = 0;
     loop {
+        println!("i : {i}");
         let mut init_buf = [0u8; 4];
-        stream.read_exact(&mut init_buf).unwrap();
+        println!("Here before reading init buff");
+        stream.read_exact(&mut init_buf).expect("Failed to read length of the request");
         let len = u32::from_le_bytes(init_buf[..].try_into().unwrap());
+        println!("len to read: {}", len);
 
         let mut buf = vec![0u8; len as _];
         stream.read_exact(&mut buf).unwrap();
+        println!("here");
 
         let message = Message::parse_message(&buf);
         println!("Received message: {:?}", message);
         replica.on_message(stream, message);
+        i += 1;
     }
 }
