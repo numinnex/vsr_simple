@@ -53,7 +53,10 @@ impl Replica {
             .zip(self.config.addresses.iter())
         {
             if *replica_id != self.id {
-                println!("Sending message to replica with id: {}", replica_id);
+                println!(
+                    "Sending message: {:?} to replica with id: {}",
+                    message, replica_id
+                );
                 let bytes = message.to_bytes();
                 let mut stream = TcpStream::connect(addr).unwrap();
                 stream
