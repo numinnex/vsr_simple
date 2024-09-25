@@ -6,9 +6,9 @@ use crate::{
 };
 use std::{
     cell::RefCell,
-    collections::{hash_map::Entry, HashMap},
+    collections::HashMap,
     io::{Read, Write},
-    net::{SocketAddr, TcpStream},
+    net::TcpStream,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -62,6 +62,17 @@ impl Replica {
                 stream
                     .write_all(&bytes)
                     .expect("Failed to send message to replica");
+                let mut len_bytes = vec![0u8; 4];
+                stream
+                    .read_exact(&mut len_bytes)
+                    .expect("Failed to read response from replica.");
+                let length = u32::from_le_bytes(len_bytes.try_into().unwrap());
+                let mut buffer = vec![0u8; length as _];
+                stream
+                    .read_exact(&mut buffer)
+                    .expect("Failed to read response from replica.");
+                let message = Message::parse_message(&buffer);
+                self.on_message(&mut stream, message);
             }
         }
     }
@@ -99,7 +110,7 @@ impl Replica {
         self.commit_number.load(Ordering::Acquire)
     }
 
-    pub fn on_message(&self, message: Message<Op>) {
+    pub fn on_message(&self, stream: &mut TcpStream, message: Message<Op>) {
         match message {
             Message::Request {
                 client_id,
@@ -121,7 +132,7 @@ impl Replica {
                 // Append to log.
                 // Update clients table.
                 // Send `PrepareOk` to primary.
-                self.on_prepare(view_number, op_number, op, commit_number)
+                self.on_prepare(stream, view_number, op_number, op, commit_number)
             }
             Message::PrepareOk {
                 view_number,
@@ -175,9 +186,14 @@ impl Replica {
         self.send_msg_to_replicas(message);
     }
 
-    fn on_prepare(&self, view_number: usize, op_number: usize, op: Op, commit_number: usize) {
-        println!("TROLOLOLO");
-        /*
+    fn on_prepare(
+        &self,
+        stream: &mut TcpStream,
+        view_number: usize,
+        op_number: usize,
+        op: Op,
+        commit_number: usize,
+    ) {
         assert!(!self.is_primary());
         if self.view_number != view_number {
             // This means that our backup has felt behind during the `ViewChange` protocol.
@@ -200,7 +216,15 @@ impl Replica {
             self.commit_op(op_number);
         }
         // Send message back to primary.
-        */
+        let message = Message::PrepareOk {
+            view_number: self.view_number,
+            op_number: self.op_number.load(Ordering::Acquire),
+        };
+        let bytes = message.to_bytes();
+        stream
+            .write_all(&bytes)
+            .expect("Failed to send PrepareOk back to leader");
+        // stream
     }
 
     fn on_prepare_ok(&self, view_number: usize, op_number: usize) {

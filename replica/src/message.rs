@@ -1,5 +1,3 @@
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-
 use client::Op;
 
 // Discriminator table (singular byte)
@@ -49,6 +47,27 @@ impl Message<Op> {
                     op,
                 }
             }
+            2 => {
+                let view_number = usize::from_le_bytes(buf[1..9].try_into().unwrap());
+                let commit_number = usize::from_le_bytes(buf[9..17].try_into().unwrap());
+                let op_number = usize::from_le_bytes(buf[17..25].try_into().unwrap());
+                let remainder = &buf[25..];
+                let op = Op::from_bytes(remainder);
+                Message::Prepare {
+                    view_number,
+                    commit_number,
+                    op_number,
+                    op,
+                }
+            }
+            3 => {
+                let view_number = usize::from_le_bytes(buf[1..9].try_into().unwrap());
+                let op_number = usize::from_le_bytes(buf[9..17].try_into().unwrap());
+                Message::PrepareOk {
+                    view_number,
+                    op_number,
+                }
+            }
             _ => unreachable!(),
         }
     }
@@ -77,11 +96,34 @@ impl Message<Op> {
                 op,
                 op_number,
                 commit_number,
-            } => todo!(),
+            } => {
+                let op_bytes = op.to_bytes();
+                let op_len = op_bytes.len();
+                let length = 1 + 8 + 8 + 8 + op_len;
+                let discriminator = 2u8;
+                let mut bytes = Vec::with_capacity(length);
+                bytes.extend_from_slice(&(length as u32).to_le_bytes());
+                bytes.extend_from_slice(&discriminator.to_le_bytes());
+                bytes.extend_from_slice(&view_number.to_le_bytes());
+                bytes.extend_from_slice(&commit_number.to_le_bytes());
+                bytes.extend_from_slice(&op_number.to_le_bytes());
+                bytes.extend_from_slice(&op_bytes);
+                bytes
+            }
             Message::PrepareOk {
                 view_number,
                 op_number,
-            } => todo!(),
+            } => {
+                let length = 1 + 8 + 8;
+                let discriminator = 3u8;
+                let mut bytes = Vec::with_capacity(length);
+                bytes.extend_from_slice(&(length as u32).to_le_bytes());
+                bytes.extend_from_slice(&discriminator.to_le_bytes());
+                bytes.extend_from_slice(&view_number.to_le_bytes());
+                bytes.extend_from_slice(&op_number.to_le_bytes());
+
+                bytes
+            }
             Message::Commit {
                 view_number,
                 commit_number,

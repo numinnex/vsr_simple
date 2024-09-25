@@ -49,18 +49,15 @@ fn main() {
 
 fn handle_connection(stream: &mut TcpStream, replica: Rc<Replica>) {
     loop {
-        println!("XDD");
         let mut init_buf = [0u8; 4];
         stream.read_exact(&mut init_buf).unwrap();
         let len = u32::from_le_bytes(init_buf[..].try_into().unwrap());
-        println!("len: {len}");
 
         let mut buf = vec![0u8; len as _];
         stream.read_exact(&mut buf).unwrap();
-        println!("buf: {:?}", buf);
 
         let message = Message::parse_message(&buf);
         println!("Received message: {:?}", message);
-        replica.on_message(message);
+        replica.on_message(stream, message);
     }
 }
