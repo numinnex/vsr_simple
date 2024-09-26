@@ -2,5 +2,6 @@
 pub enum Status {
     #[default]
     Normal,
+    Recovery,
     ViewChange,
 }

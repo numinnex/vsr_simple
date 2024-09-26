@@ -5,6 +5,9 @@ use client::Op;
 // 2 => Prepare
 // 3 => PrepareOk
 // 4 => Commit
+// 5 => StartViewChange
+// 6 => DoViewChange
+// 6 => StartView
 // TODO: Add variants to handle state transfers.
 
 #[derive(Debug)]
@@ -29,6 +32,22 @@ pub enum Message<Op: Clone> {
         commit_number: usize,
     },
     // TODO: Add variants to handle state tranfers.
+    StartViewChange {
+        view_number: usize,
+        replica_id: usize,
+    },
+    DoViewChange {
+        view_number: usize,
+        replica_id: usize,
+        commit_number: usize,
+        log: Vec<Op>,
+    },
+    StartView {
+        view_number: usize,
+        replica_id: usize,
+        commit_number: usize,
+        log: Vec<Op>,
+    },
 }
 
 impl Message<Op> {
@@ -67,7 +86,7 @@ impl Message<Op> {
                     view_number,
                     op_number,
                 }
-            },
+            }
             4 => {
                 let view_number = usize::from_le_bytes(buf[1..9].try_into().unwrap());
                 let commit_number = usize::from_le_bytes(buf[9..17].try_into().unwrap());
@@ -145,7 +164,23 @@ impl Message<Op> {
                 bytes.extend_from_slice(&commit_number.to_le_bytes());
 
                 bytes
-            },
+            }
+            Message::StartViewChange {
+                view_number,
+                replica_id,
+            } => todo!(),
+            Message::DoViewChange {
+                view_number,
+                replica_id,
+                commit_number,
+                log,
+            } => todo!(),
+            Message::StartView {
+                view_number,
+                replica_id,
+                commit_number,
+                log,
+            } => todo!(),
         }
     }
 }

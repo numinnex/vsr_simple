@@ -5,7 +5,8 @@ use replica_config::ReplicaConfig;
 use std::{
     io::Read,
     net::{TcpListener, TcpStream},
-    rc::Rc, time::Instant,
+    rc::Rc,
+    time::Instant,
 };
 
 const ONE_SECOND: u128 = 1000;

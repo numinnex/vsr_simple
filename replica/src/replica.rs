@@ -162,6 +162,22 @@ impl Replica {
                 // Update clients table.
                 self.on_commit(view_number, commit_number);
             }
+            Message::StartViewChange {
+                view_number,
+                replica_id,
+            } => todo!(),
+            Message::DoViewChange {
+                view_number,
+                replica_id,
+                commit_number,
+                log,
+            } => todo!(),
+            Message::StartView {
+                view_number,
+                replica_id,
+                commit_number,
+                log,
+            } => todo!(),
         }
     }
 }
