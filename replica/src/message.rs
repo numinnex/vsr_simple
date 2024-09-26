@@ -67,6 +67,14 @@ impl Message<Op> {
                     view_number,
                     op_number,
                 }
+            },
+            4 => {
+                let view_number = usize::from_le_bytes(buf[1..9].try_into().unwrap());
+                let commit_number = usize::from_le_bytes(buf[9..17].try_into().unwrap());
+                Message::Commit {
+                    view_number,
+                    commit_number,
+                }
             }
             _ => unreachable!(),
         }
@@ -127,7 +135,17 @@ impl Message<Op> {
             Message::Commit {
                 view_number,
                 commit_number,
-            } => todo!(),
+            } => {
+                let length = 1 + 8 + 8;
+                let discriminator = 3u8;
+                let mut bytes = Vec::with_capacity(length + 4);
+                bytes.extend_from_slice(&(length as u32).to_le_bytes());
+                bytes.extend_from_slice(&discriminator.to_le_bytes());
+                bytes.extend_from_slice(&view_number.to_le_bytes());
+                bytes.extend_from_slice(&commit_number.to_le_bytes());
+
+                bytes
+            },
         }
     }
 }

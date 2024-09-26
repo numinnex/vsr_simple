@@ -5,8 +5,10 @@ use replica_config::ReplicaConfig;
 use std::{
     io::Read,
     net::{TcpListener, TcpStream},
-    rc::Rc,
+    rc::Rc, time::Instant,
 };
+
+const ONE_SECOND: u128 = 1000;
 
 pub(crate) mod client_table;
 pub(crate) mod log;
@@ -27,22 +29,24 @@ fn main() {
     for (id, addr) in ADDRESSES.into_iter().enumerate() {
         let builder = std::thread::Builder::new().name(format!("replica-{id}"));
         let config = config.clone();
-        let thread = builder.spawn(move || {
-            let replica = Rc::new(Replica::new(id, config));
-            println!("Created node with addr: {}, id: {}", addr, id);
-            let listener = TcpListener::bind(addr).expect("Failed to bind to socketerino");
-            loop {
-                let replica = replica.clone();
-                match listener.accept() {
-                    Ok((mut stream, client_addr)) => {
-                        handle_connection(&mut stream, replica);
-                    }
-                    Err(e) => {
-                        eprintln!("Error when accepting incomming connection: {}", e);
+        let thread = builder
+            .spawn(move || {
+                let replica = Rc::new(Replica::new(id, config));
+                println!("Created node with addr: {}, id: {}", addr, id);
+                let listener = TcpListener::bind(addr).expect("Failed to bind to socketerino");
+                loop {
+                    let replica = replica.clone();
+                    match listener.accept() {
+                        Ok((mut stream, client_addr)) => {
+                            handle_connection(&mut stream, replica);
+                        }
+                        Err(e) => {
+                            eprintln!("Error when accepting incomming connection: {}", e);
+                        }
                     }
                 }
-            }
-        }).unwrap();
+            })
+            .unwrap();
         threads.push(thread);
     }
     let _: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
@@ -50,13 +54,19 @@ fn main() {
 
 fn handle_connection(stream: &mut TcpStream, replica: Rc<Replica>) {
     loop {
+        let start = Instant::now();
         let thread_id = std::thread::current();
         let mut init_buf = [0u8; 4];
         match stream.read_exact(&mut init_buf) {
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                 break;
-            },
+            }
             _ => {}
+        }
+        let elapsed_ms = start.elapsed().as_millis();
+        println!("Waited for: {:.2} ms for an message", elapsed_ms);
+        if elapsed_ms > ONE_SECOND {
+            replica.on_timer();
         }
         let len = u32::from_le_bytes(init_buf[..].try_into().unwrap());
 

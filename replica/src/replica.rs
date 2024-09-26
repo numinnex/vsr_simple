@@ -74,7 +74,10 @@ impl Replica {
                     .expect("Failed to read response from replica.");
                 let message = Message::parse_message(&buffer);
                 let thread_id = std::thread::current();
-                println!("{:?} Received message from replica: {:?}", thread_id, message);
+                println!(
+                    "{:?} Received message from replica: {:?}",
+                    thread_id, message
+                );
 
                 self.on_message(&mut stream, message);
             }
@@ -226,7 +229,10 @@ impl Replica {
             view_number: self.view_number,
             op_number: self.op_number.load(Ordering::Acquire),
         };
-        println!("Sending message: {:?} to replica as response for prepare message", message);
+        println!(
+            "Sending message: {:?} to replica as response for prepare message",
+            message
+        );
         let bytes = message.to_bytes();
         stream
             .write_all(&bytes)
@@ -265,5 +271,16 @@ impl Replica {
             // Commit the op
             self.commit_op(op_number);
         }
+    }
+
+    pub fn on_timer(&self) {
+        let view_number = self.view_number;
+        let commit_number = self.commit_number();
+
+        let message = Message::Commit {
+            view_number,
+            commit_number,
+        };
+        self.send_msg_to_replicas(message);
     }
 }
