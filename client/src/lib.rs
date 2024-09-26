@@ -38,8 +38,8 @@ impl Op {
     }
 }
 
-pub const ADDRESSES: [SocketAddr; 2] = [
+pub const ADDRESSES: [SocketAddr; 3] = [
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1337),
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 2137),
-    //SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6969),
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6969),
 ];

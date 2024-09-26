@@ -49,22 +49,22 @@ fn main() {
 }
 
 fn handle_connection(stream: &mut TcpStream, replica: Rc<Replica>) {
-    let mut i = 0;
     loop {
-        println!("i : {i}");
+        let thread_id = std::thread::current();
         let mut init_buf = [0u8; 4];
-        println!("Here before reading init buff");
-        stream.read_exact(&mut init_buf).expect("Failed to read length of the request");
+        match stream.read_exact(&mut init_buf) {
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                break;
+            },
+            _ => {}
+        }
         let len = u32::from_le_bytes(init_buf[..].try_into().unwrap());
-        println!("len to read: {}", len);
 
         let mut buf = vec![0u8; len as _];
         stream.read_exact(&mut buf).unwrap();
-        println!("here");
 
         let message = Message::parse_message(&buf);
-        println!("Received message: {:?}", message);
+        println!("{:?}, Received message: {:?}", thread_id, message);
         replica.on_message(stream, message);
-        i += 1;
     }
 }
