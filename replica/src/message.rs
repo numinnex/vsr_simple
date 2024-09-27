@@ -1,4 +1,4 @@
-use client::Op;
+use client::{Op, MAX_OP_SIZE};
 
 // Discriminator table (singular byte)
 // 1 => Request
@@ -7,10 +7,10 @@ use client::Op;
 // 4 => Commit
 // 5 => StartViewChange
 // 6 => DoViewChange
-// 6 => StartView
+// 7 => StartView
 // TODO: Add variants to handle state transfers.
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Message<Op: Clone> {
     Request {
         client_id: usize,
@@ -52,13 +52,25 @@ pub enum Message<Op: Clone> {
 
 impl Message<Op> {
     pub fn parse_message(buf: &[u8]) -> Self {
+        fn parse_op_bytes(buf: &[u8]) -> Vec<Op> {
+            let mut position = 0;
+            let mut log = Vec::new();
+
+            while position < buf.len() {
+                let (op, size) = Op::from_bytes(&buf[position..]);
+                log.push(op);
+                position += size;
+            }
+            log
+        }
+
         let discriminator = buf[0];
         match discriminator {
             1 => {
                 let client_id = usize::from_le_bytes(buf[1..9].try_into().unwrap());
                 let request_number = usize::from_le_bytes(buf[9..17].try_into().unwrap());
                 let remainder = &buf[17..];
-                let op = Op::from_bytes(remainder);
+                let (op, _) = Op::from_bytes(remainder);
 
                 Message::Request {
                     client_id,
@@ -71,7 +83,7 @@ impl Message<Op> {
                 let commit_number = usize::from_le_bytes(buf[9..17].try_into().unwrap());
                 let op_number = usize::from_le_bytes(buf[17..25].try_into().unwrap());
                 let remainder = &buf[25..];
-                let op = Op::from_bytes(remainder);
+                let (op, _) = Op::from_bytes(remainder);
                 Message::Prepare {
                     view_number,
                     commit_number,
@@ -93,6 +105,41 @@ impl Message<Op> {
                 Message::Commit {
                     view_number,
                     commit_number,
+                }
+            }
+            5 => {
+                let view_number = usize::from_le_bytes(buf[1..9].try_into().unwrap());
+                let replica_id = usize::from_le_bytes(buf[9..17].try_into().unwrap());
+                Message::StartViewChange {
+                    view_number,
+                    replica_id,
+                }
+            }
+            6 => {
+                let view_number = usize::from_le_bytes(buf[1..9].try_into().unwrap());
+                let replica_id = usize::from_le_bytes(buf[9..17].try_into().unwrap());
+                let commit_number = usize::from_le_bytes(buf[17..25].try_into().unwrap());
+
+                let remainder = &buf[25..];
+                let log = parse_op_bytes(remainder);
+                Message::DoViewChange {
+                    view_number,
+                    replica_id,
+                    commit_number,
+                    log,
+                }
+            }
+            7 => {
+                let view_number = usize::from_le_bytes(buf[1..9].try_into().unwrap());
+                let replica_id = usize::from_le_bytes(buf[9..17].try_into().unwrap());
+                let commit_number = usize::from_le_bytes(buf[17..25].try_into().unwrap());
+                let remainder = &buf[25..];
+                let log = parse_op_bytes(remainder);
+                Message::StartView {
+                    view_number,
+                    replica_id,
+                    commit_number,
+                    log,
                 }
             }
             _ => unreachable!(),
@@ -156,7 +203,7 @@ impl Message<Op> {
                 commit_number,
             } => {
                 let length = 1 + 8 + 8;
-                let discriminator = 3u8;
+                let discriminator = 4u8;
                 let mut bytes = Vec::with_capacity(length + 4);
                 bytes.extend_from_slice(&(length as u32).to_le_bytes());
                 bytes.extend_from_slice(&discriminator.to_le_bytes());
@@ -168,19 +215,106 @@ impl Message<Op> {
             Message::StartViewChange {
                 view_number,
                 replica_id,
-            } => todo!(),
+            } => {
+                let length = 1 + 8 + 8;
+                let mut bytes = Vec::with_capacity(length + 4);
+                let discriminator = 5u8;
+                bytes.extend_from_slice(&(length as u32).to_le_bytes());
+                bytes.extend_from_slice(&discriminator.to_le_bytes());
+                bytes.extend_from_slice(&view_number.to_le_bytes());
+                bytes.extend_from_slice(&replica_id.to_le_bytes());
+                bytes
+            }
             Message::DoViewChange {
                 view_number,
                 replica_id,
                 commit_number,
                 log,
-            } => todo!(),
+            } => {
+                let length = 1 + 8 + 8 + 8 + log.len() * MAX_OP_SIZE;
+                let mut bytes = Vec::with_capacity(length + 4);
+                let discriminator = 6u8;
+                bytes.extend_from_slice(&(length as u32).to_le_bytes());
+                bytes.extend_from_slice(&discriminator.to_le_bytes());
+                bytes.extend_from_slice(&view_number.to_le_bytes());
+                bytes.extend_from_slice(&replica_id.to_le_bytes());
+                bytes.extend_from_slice(&commit_number.to_le_bytes());
+                let op_bytes = log.iter().flat_map(|op| op.to_bytes());
+                bytes.extend(op_bytes);
+                bytes
+            }
             Message::StartView {
                 view_number,
                 replica_id,
                 commit_number,
                 log,
-            } => todo!(),
+            } => {
+                let length = 1 + 8 + 8 + 8 + log.len() * MAX_OP_SIZE;
+                let mut bytes = Vec::with_capacity(length);
+                let discriminator = 7u8;
+                bytes.extend_from_slice(&(length as u32).to_le_bytes());
+                bytes.extend_from_slice(&discriminator.to_le_bytes());
+                bytes.extend_from_slice(&view_number.to_le_bytes());
+                bytes.extend_from_slice(&replica_id.to_le_bytes());
+                bytes.extend_from_slice(&commit_number.to_le_bytes());
+                let op_bytes = log.iter().flat_map(|op| op.to_bytes());
+                bytes.extend(op_bytes);
+                bytes
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn generate_log() -> Vec<Op> {
+        std::iter::repeat(Op::Add(69)).take(10).collect()
+    }
+
+    fn generate_start_view_message() -> Message<Op> {
+        let view_number = 1;
+        let replica_id = 2;
+        let commit_number = 3;
+        let log = generate_log();
+
+        Message::StartView {
+            view_number,
+            replica_id,
+            commit_number,
+            log,
+        }
+    }
+
+    fn generate_do_view_change_message() -> Message<Op> {
+        let view_number = 1;
+        let replica_id = 2;
+        let commit_number = 3;
+        let log = generate_log();
+
+        Message::DoViewChange {
+            view_number,
+            replica_id,
+            commit_number,
+            log,
+        }
+    }
+
+    #[test]
+    fn serializing_and_deserializing_start_view_message_should_maintain_correct_schema() {
+        let message = generate_start_view_message();
+        let bytes = message.to_bytes();
+        let message_deserialized = Message::parse_message(&bytes[4..]);
+
+        assert_eq!(message, message_deserialized);
+    }
+
+    #[test]
+    fn serializing_and_deserializing_do_view_change_message_should_maintain_correct_schema() {
+        let message = generate_do_view_change_message();
+        let bytes = message.to_bytes();
+        let message_deserialized = Message::parse_message(&bytes[4..]);
+
+        assert_eq!(message, message_deserialized);
     }
 }

@@ -4,7 +4,9 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 // 0 => Nop
 // 1 => Add
 
-#[derive(Debug, Clone)]
+pub const MAX_OP_SIZE: usize = 1 + 8;
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Op {
     Nop,
     Add(u64),
@@ -25,13 +27,13 @@ impl Op {
         bytes
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> Self {
+    pub fn from_bytes(bytes: &[u8]) -> (Self, usize) {
         let discriminator = bytes[0];
         match discriminator {
-            0 => Op::Nop,
+            0 => (Op::Nop, 1),
             1 => {
                 let value = u64::from_le_bytes(bytes[1..9].try_into().unwrap());
-                Op::Add(value)
+                (Op::Add(value), 9)
             }
             _ => unreachable!(),
         }
