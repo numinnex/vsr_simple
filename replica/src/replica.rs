@@ -338,21 +338,24 @@ impl Replica {
         }
     }
 
-    fn enter_start_view_change_stage(&self, view_number: usize) -> usize {
-        self.view_number.store(view_number, Ordering::Release);
-        self.status.replace(Status::ViewChange);
+    fn ack_start_view_change(&self, view_number) {
         let mut view_change_counter = self.view_change_counter.borrow_mut();
         let count = view_change_counter
             .entry(view_number)
             .and_modify(|v| *v += 1)
             .or_insert(1);
-        *count
+    }
+
+    fn enter_start_view_change_stage(&self, view_number: usize) {
+        self.view_number.store(view_number, Ordering::Release);
+        self.status.replace(Status::ViewChange);
     }
 
     fn view_change(&self) {
         let current_view_number = self.view_number.load(Ordering::Acquire);
         let view_number = (current_view_number + 1) % self.number_of_replicas();
         self.enter_start_view_change_stage(view_number);
+        self.ack_start_view_change(view_number);
         let message = Message::StartViewChange {
             view_number,
             replica_id: self.id,
@@ -374,11 +377,24 @@ impl Replica {
     fn on_start_view_change(&self, view_number: usize, replica_id: usize) {
         // Drop this assertion.
         assert!(self.id != replica_id);
-        assert!(*self.status.borrow() != Status::Normal);
-        assert!(view_number != self.view_number());
-        let start_view_changes = self.enter_start_view_change_stage(view_number);
+        if view_number > self.view_number() {
+            self.enter_start_view_change_stage(view_number);
+            // Ack our own `StartViewChange`
+            self.ack_start_view_change(view_number);
+            // Broadcast the `StartViewChange` message to other backups.
+            let message = Message::StartViewChange {
+                view_number,
+                replica_id: self.id,
+            };
+            // Send the message to ourselves..
+            self.send_msg_to_replicas(message);
+        }
+        // Ack the incomming `StartViewChange`
+        self.ack_start_view_change(view_number);
 
-        if start_view_changes >= self.quorum() {
+        let view_change_counter = self.view_change_counter.borrow();
+        let start_view_changes = view_change_counter.get(&view_number).unwrap();
+        if *start_view_changes >= self.quorum() {
             // Send message to new primary.
             let log = self.log.borrow().clone();
             let message = Message::DoViewChange {
@@ -388,14 +404,6 @@ impl Replica {
                 log,
             };
             self.send_msg_to_primary(message);
-        } else {
-            // Broadcast the `StartViewChange` message to other backups.
-            let message = Message::StartViewChange {
-                view_number,
-                replica_id: self.id,
-            };
-            // Send the message to ourselves..
-            self.send_msg_to_replicas(message);
         }
     }
 
