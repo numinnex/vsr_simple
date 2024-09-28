@@ -6,10 +6,10 @@ use std::{
     io::Read,
     net::{TcpListener, TcpStream},
     rc::Rc,
-    time::Instant,
+    time::Duration,
 };
 
-const ONE_SECOND: u128 = 1000;
+const TWO_SECONDS: u64 = 2;
 
 pub(crate) mod client_table;
 pub(crate) mod log;
@@ -38,7 +38,10 @@ fn main() {
                 loop {
                     let replica = replica.clone();
                     match listener.accept() {
-                        Ok((mut stream, client_addr)) => {
+                        Ok((mut stream, _)) => {
+                            stream
+                                .set_read_timeout(Some(Duration::from_secs(TWO_SECONDS)))
+                                .unwrap();
                             handle_connection(&mut stream, replica);
                         }
                         Err(e) => {
@@ -55,19 +58,17 @@ fn main() {
 
 fn handle_connection(stream: &mut TcpStream, replica: Rc<Replica>) {
     loop {
-        let start = Instant::now();
         let thread_id = std::thread::current();
         let mut init_buf = [0u8; 4];
         match stream.read_exact(&mut init_buf) {
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                 break;
             }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                replica.on_timer();
+                continue;
+            }
             _ => {}
-        }
-        let elapsed_ms = start.elapsed().as_millis();
-        println!("Waited for: {:.2} ms for an message", elapsed_ms);
-        if elapsed_ms > ONE_SECOND {
-            replica.on_timer();
         }
         let len = u32::from_le_bytes(init_buf[..].try_into().unwrap());
 

@@ -8,22 +8,25 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     io::{Read, Write},
-    net::{Shutdown, TcpStream},
+    net::TcpStream,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
 pub struct Replica {
     pub id: usize,
-    pub status: Status,
+    pub status: RefCell<Status>,
     pub config: ReplicaConfig,
     pub clients_table: ClientTable,
     //TODO: Op in the log should be ref counted.
     pub log: RefCell<Vec<Op>>,
-    pub view_number: usize,
+    pub view_number: AtomicUsize,
     pub op_number: AtomicUsize,
     pub commit_number: AtomicUsize,
 
     acks: RefCell<HashMap<usize, usize>>,
+    backup_idle_ticks: AtomicUsize,
+    view_change_counter: RefCell<HashMap<usize, usize>>,
+    do_view_change_counter: RefCell<HashMap<usize, usize>>,
     stm: StateMachine,
 }
 
@@ -39,9 +42,14 @@ impl Replica {
             op_number: Default::default(),
             commit_number: Default::default(),
             acks: Default::default(),
+            backup_idle_ticks: Default::default(),
+            view_change_counter: Default::default(),
+            do_view_change_counter: Default::default(),
             stm: Default::default(),
         }
     }
+
+    fn send_msg_to_primary(&self, message: Message<Op>) {}
 
     // Couldn't be bothered creating proper connections cache, instead just connect everytime
     // a new request is being made to the replica.
@@ -84,8 +92,12 @@ impl Replica {
         }
     }
 
+    fn number_of_replicas(&self) -> usize {
+        self.config.replicas.len()
+    }
+
     fn quorum(&self) -> usize {
-        let replicas_count = self.config.replicas.len();
+        let replicas_count = self.number_of_replicas();
         replicas_count / 2 + 1
     }
 
@@ -110,11 +122,19 @@ impl Replica {
     }
 
     pub fn is_primary(&self) -> bool {
-        self.id == self.config.primary_id(self.view_number)
+        self.id == self.config.primary_id(self.view_number())
     }
 
     pub fn commit_number(&self) -> usize {
         self.commit_number.load(Ordering::Acquire)
+    }
+
+    pub fn view_number(&self) -> usize {
+        self.view_number.load(Ordering::Acquire)
+    }
+
+    pub fn op_number(&self) -> usize {
+        self.op_number.load(Ordering::Acquire)
     }
 
     pub fn on_message(&self, stream: &mut TcpStream, message: Message<Op>) {
@@ -165,19 +185,25 @@ impl Replica {
             Message::StartViewChange {
                 view_number,
                 replica_id,
-            } => todo!(),
+            } => {
+                self.on_start_view_change(view_number, replica_id);
+            }
             Message::DoViewChange {
                 view_number,
                 replica_id,
                 commit_number,
                 log,
-            } => todo!(),
+            } => {
+                self.on_do_view_change(view_number, replica_id, commit_number, log);
+            }
             Message::StartView {
                 view_number,
                 replica_id,
                 commit_number,
                 log,
-            } => todo!(),
+            } => {
+                self.on_start_view(view_number, replica_id, commit_number, log);
+            }
         }
     }
 }
@@ -186,7 +212,7 @@ impl Replica {
 impl Replica {
     fn on_request(&self, client_id: usize, request_number: usize, op: Op) {
         assert!(self.is_primary());
-        if self.status != Status::Normal {
+        if *self.status.borrow() != Status::Normal {
             // TODO: Impl mechanism that teaches client to try again later on.
             return;
         }
@@ -201,7 +227,7 @@ impl Replica {
         self.acks.borrow_mut().insert(1, op_number);
         // Send `Prepare` message to backups.
         let commit_number = self.commit_number();
-        let view_number = self.view_number;
+        let view_number = self.view_number();
         let message = Message::Prepare {
             view_number,
             op,
@@ -219,8 +245,9 @@ impl Replica {
         op: Op,
         commit_number: usize,
     ) {
+        self.backup_idle_ticks.store(0, Ordering::Relaxed);
         assert!(!self.is_primary());
-        if self.view_number != view_number {
+        if self.view_number() != view_number {
             // This means that our backup has felt behind during the `ViewChange` protocol.
             // Initiate the recovery process.
         }
@@ -242,7 +269,7 @@ impl Replica {
         }
         // Send message back to primary.
         let message = Message::PrepareOk {
-            view_number: self.view_number,
+            view_number: self.view_number(),
             op_number: self.op_number.load(Ordering::Acquire),
         };
         println!(
@@ -257,7 +284,7 @@ impl Replica {
 
     fn on_prepare_ok(&self, view_number: usize, op_number: usize) {
         assert!(self.is_primary());
-        assert_eq!(self.view_number, view_number);
+        assert_eq!(self.view_number(), view_number);
 
         self.ack_op(op_number);
         if self.quorum_for_op(op_number) {
@@ -268,14 +295,16 @@ impl Replica {
     }
 
     fn on_commit(&self, view_number: usize, commit_number: usize) {
-        if self.status != Status::Normal {
+        self.backup_idle_ticks.store(0, Ordering::Relaxed);
+        if *self.status.borrow() != Status::Normal {
             return;
         }
-        if view_number < self.view_number {
+        let backup_view_number = self.view_number();
+        if view_number < backup_view_number {
             return;
         }
-        assert_eq!(self.status, Status::Normal);
-        assert_eq!(self.view_number, view_number);
+        assert_eq!(*self.status.borrow(), Status::Normal);
+        assert_eq!(backup_view_number, view_number);
 
         let current_commit_number = self.commit_number.load(Ordering::Acquire);
         if commit_number > current_commit_number {
@@ -290,13 +319,113 @@ impl Replica {
     }
 
     pub fn on_timer(&self) {
-        let view_number = self.view_number;
-        let commit_number = self.commit_number();
+        if self.is_primary() {
+            // Send the `Commit` message to our backups.
+            let view_number = self.view_number();
+            let commit_number = self.commit_number();
+            let message = Message::Commit {
+                view_number,
+                commit_number,
+            };
 
-        let message = Message::Commit {
+            self.send_msg_to_replicas(message);
+        } else {
+            let idle_ticks = self.backup_idle_ticks.fetch_add(1, Ordering::Relaxed);
+            if idle_ticks > 0 {
+                // Send the `StartViewChange` message to other backups.
+                self.view_change();
+            }
+        }
+    }
+
+    fn enter_start_view_change_stage(&self, view_number: usize) -> usize {
+        self.view_number.store(view_number, Ordering::Release);
+        self.status.replace(Status::ViewChange);
+        let mut view_change_counter = self.view_change_counter.borrow_mut();
+        let count = view_change_counter
+            .entry(view_number)
+            .and_modify(|v| *v += 1)
+            .or_insert(1);
+        *count
+    }
+
+    fn view_change(&self) {
+        let current_view_number = self.view_number.load(Ordering::Acquire);
+        let view_number = (current_view_number + 1) % self.number_of_replicas();
+        self.enter_start_view_change_stage(view_number);
+        let message = Message::StartViewChange {
             view_number,
-            commit_number,
+            replica_id: self.id,
         };
         self.send_msg_to_replicas(message);
+    }
+
+    fn on_start_view(
+        &self,
+        view_number: usize,
+        replica_id: usize,
+        commit_number: usize,
+        log: Vec<Op>,
+    ) {
+        // TODO: Update the log.
+        self.status.replace(Status::Normal);
+    }
+
+    fn on_start_view_change(&self, view_number: usize, replica_id: usize) {
+        // Drop this assertion.
+        assert!(self.id != replica_id);
+        assert!(*self.status.borrow() != Status::Normal);
+        assert!(view_number != self.view_number());
+        let start_view_changes = self.enter_start_view_change_stage(view_number);
+
+        if start_view_changes >= self.quorum() {
+            // Send message to new primary.
+            let log = self.log.borrow().clone();
+            let message = Message::DoViewChange {
+                view_number,
+                commit_number: self.commit_number(),
+                replica_id: self.id,
+                log,
+            };
+            self.send_msg_to_primary(message);
+        } else {
+            // Broadcast the `StartViewChange` message to other backups.
+            let message = Message::StartViewChange {
+                view_number,
+                replica_id: self.id,
+            };
+            // Send the message to ourselves..
+            self.send_msg_to_replicas(message);
+        }
+    }
+
+    fn on_do_view_change(
+        &self,
+        view_number: usize,
+        replica_id: usize,
+        commit_number: usize,
+        log: Vec<Op>,
+    ) {
+        assert!(*self.status.borrow() != Status::Normal);
+        let mut do_view_change_counter = self.do_view_change_counter.borrow_mut();
+        let do_views = do_view_change_counter
+            .entry(view_number)
+            .and_modify(|v| *v += 1)
+            .or_insert(1);
+
+        if *do_views >= self.quorum() {
+            // Switch back to normal state.
+            self.status.replace(Status::Normal);
+            // Take log from the most recent replica.
+            let log = self.log.borrow().clone();
+            // Send `StartView` Message to other replicas.
+            let message = Message::StartView {
+                view_number,
+                commit_number,
+                replica_id: self.id,
+                log,
+            };
+            self.send_msg_to_replicas(message);
+        }
     }
 }
