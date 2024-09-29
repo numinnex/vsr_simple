@@ -12,6 +12,24 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+struct ViewSnapshot<Op> {
+    view_number: usize,
+    op_number: usize,
+    commit_number: usize,
+    log: Vec<Op>,
+}
+
+impl ViewSnapshot<Op> {
+    pub fn new(view_number: usize, op_number: usize, commit_number: usize, log: Vec<Op>) -> Self {
+        Self {
+            view_number,
+            op_number,
+            commit_number,
+            log,
+        }
+    }
+}
+
 pub struct Replica {
     pub id: usize,
     pub status: RefCell<Status>,
@@ -23,6 +41,8 @@ pub struct Replica {
     pub op_number: AtomicUsize,
     pub commit_number: AtomicUsize,
 
+    // Used during view change to choose the new best log.
+    view_snapshot: RefCell<Option<ViewSnapshot<Op>>>,
     acks: RefCell<HashMap<usize, usize>>,
     backup_idle_ticks: AtomicUsize,
     view_change_counter: RefCell<HashMap<usize, usize>>,
@@ -41,6 +61,7 @@ impl Replica {
             view_number: Default::default(),
             op_number: Default::default(),
             commit_number: Default::default(),
+            view_snapshot: Default::default(),
             acks: Default::default(),
             backup_idle_ticks: Default::default(),
             view_change_counter: Default::default(),
@@ -190,19 +211,21 @@ impl Replica {
             }
             Message::DoViewChange {
                 view_number,
+                op_number,
                 replica_id,
                 commit_number,
                 log,
             } => {
-                self.on_do_view_change(view_number, replica_id, commit_number, log);
+                self.on_do_view_change(view_number, op_number, replica_id, commit_number, log);
             }
             Message::StartView {
                 view_number,
+                op_number,
                 replica_id,
                 commit_number,
                 log,
             } => {
-                self.on_start_view(view_number, replica_id, commit_number, log);
+                self.on_start_view(view_number, op_number, replica_id, commit_number, log);
             }
         }
     }
@@ -220,12 +243,12 @@ impl Replica {
         // If it's smaller, drop the request (duplicate)
         // If it's equal to current request_number, resend the response.
 
-        // Append to log.
+        // Append to log
         self.append_to_log(op.clone());
         // Ack the op ourselves
         let op_number = self.op_number.load(Ordering::Acquire);
         self.acks.borrow_mut().insert(1, op_number);
-        // Send `Prepare` message to backups.
+        // Send `Prepare` message to backups
         let commit_number = self.commit_number();
         let view_number = self.view_number();
         let message = Message::Prepare {
@@ -338,7 +361,7 @@ impl Replica {
         }
     }
 
-    fn ack_start_view_change(&self, view_number) {
+    fn ack_start_view_change(&self, view_number: usize) {
         let mut view_change_counter = self.view_change_counter.borrow_mut();
         let count = view_change_counter
             .entry(view_number)
@@ -346,9 +369,21 @@ impl Replica {
             .or_insert(1);
     }
 
-    fn enter_start_view_change_stage(&self, view_number: usize) {
-        self.view_number.store(view_number, Ordering::Release);
+    fn set_view_change_status(&self) {
         self.status.replace(Status::ViewChange);
+    }
+
+    fn set_view_number(&self, view_number: usize) {
+        self.view_number.store(view_number, Ordering::Release);
+    }
+
+    fn set_op_number(&self, op_number: usize) {
+        self.op_number.store(op_number, Ordering::Release);
+    }
+
+    fn enter_start_view_change_stage(&self, view_number: usize) {
+        self.set_view_number(view_number);
+        self.set_view_change_status();
     }
 
     fn view_change(&self) {
@@ -366,19 +401,31 @@ impl Replica {
     fn on_start_view(
         &self,
         view_number: usize,
+        op_number: usize,
         replica_id: usize,
         commit_number: usize,
         log: Vec<Op>,
     ) {
-        // TODO: Update the log.
         self.status.replace(Status::Normal);
+        self.set_view_number(view_number);
+        self.set_op_number(op_number);
+        *self.log.borrow_mut() = log;
+        // Commit uncommited ops.
+        // There is no need to send `PrepareOk` messages to the primary
+        // since we preemptively commit uncommited ops on primary
+        // once quorum for `DoViewChange` is reached.
+        let current_commit_number = self.commit_number();
+        if current_commit_number < commit_number {
+            for uncommited_op in current_commit_number..commit_number {
+                self.commit_op(uncommited_op);
+            }
+        }
     }
 
     fn on_start_view_change(&self, view_number: usize, replica_id: usize) {
-        // Drop this assertion.
         assert!(self.id != replica_id);
         if view_number > self.view_number() {
-            self.enter_start_view_change_stage(view_number);
+            self.set_view_change_status();
             // Ack our own `StartViewChange`
             self.ack_start_view_change(view_number);
             // Broadcast the `StartViewChange` message to other backups.
@@ -397,8 +444,10 @@ impl Replica {
         if *start_view_changes >= self.quorum() {
             // Send message to new primary.
             let log = self.log.borrow().clone();
+            let op_number = self.op_number();
             let message = Message::DoViewChange {
                 view_number,
+                op_number,
                 commit_number: self.commit_number(),
                 replica_id: self.id,
                 log,
@@ -410,6 +459,7 @@ impl Replica {
     fn on_do_view_change(
         &self,
         view_number: usize,
+        op_number: usize,
         replica_id: usize,
         commit_number: usize,
         log: Vec<Op>,
@@ -421,15 +471,53 @@ impl Replica {
             .and_modify(|v| *v += 1)
             .or_insert(1);
 
+        // Store the best candidate for log transplant.
+        let mut view_snapshot = self.view_snapshot.borrow_mut();
+        if let Some(snapshot) = &mut *view_snapshot {
+            if view_number > snapshot.view_number {
+                // Replace ...
+                *snapshot = ViewSnapshot::new(view_number, op_number, commit_number, log);
+            } else if op_number > snapshot.op_number {
+                // Replace ...
+                *snapshot = ViewSnapshot::new(view_number, op_number, commit_number, log);
+            }
+        } else {
+            *view_snapshot = Some(ViewSnapshot::new(
+                view_number,
+                op_number,
+                commit_number,
+                log,
+            ));
+        }
+
         if *do_views >= self.quorum() {
+            assert!(self.view_snapshot.borrow().is_some());
+            // Take log from the most up to date replica.
+            let mut snapshot = self.view_snapshot.borrow_mut();
+            let snapshot = snapshot.take().unwrap();
+            let log = snapshot.log;
+            let commit_number = snapshot.commit_number;
+            let op_number = snapshot.op_number;
+            *self.log.borrow_mut() = log.clone();
+            // Set op number and commit number
+            self.set_op_number(op_number);
+            // Set the new view number.
+            self.set_view_number(view_number);
             // Switch back to normal state.
             self.status.replace(Status::Normal);
-            // Take log from the most recent replica.
-            let log = self.log.borrow().clone();
+            // Commit uncommited ops.
+            let current_commit_number = self.commit_number();
+            if current_commit_number < commit_number {
+                for uncommited_op in current_commit_number..commit_number {
+                    self.commit_op(uncommited_op);
+                }
+            }
+
             // Send `StartView` Message to other replicas.
             let message = Message::StartView {
                 view_number,
                 commit_number,
+                op_number,
                 replica_id: self.id,
                 log,
             };

@@ -38,12 +38,14 @@ pub enum Message<Op: Clone> {
     },
     DoViewChange {
         view_number: usize,
+        op_number: usize,
         replica_id: usize,
         commit_number: usize,
         log: Vec<Op>,
     },
     StartView {
         view_number: usize,
+        op_number: usize,
         replica_id: usize,
         commit_number: usize,
         log: Vec<Op>,
@@ -117,13 +119,15 @@ impl Message<Op> {
             }
             6 => {
                 let view_number = usize::from_le_bytes(buf[1..9].try_into().unwrap());
-                let replica_id = usize::from_le_bytes(buf[9..17].try_into().unwrap());
-                let commit_number = usize::from_le_bytes(buf[17..25].try_into().unwrap());
+                let op_number = usize::from_le_bytes(buf[9..17].try_into().unwrap());
+                let replica_id = usize::from_le_bytes(buf[17..25].try_into().unwrap());
+                let commit_number = usize::from_le_bytes(buf[25..33].try_into().unwrap());
 
-                let remainder = &buf[25..];
+                let remainder = &buf[33..];
                 let log = parse_op_bytes(remainder);
                 Message::DoViewChange {
                     view_number,
+                    op_number,
                     replica_id,
                     commit_number,
                     log,
@@ -131,12 +135,15 @@ impl Message<Op> {
             }
             7 => {
                 let view_number = usize::from_le_bytes(buf[1..9].try_into().unwrap());
-                let replica_id = usize::from_le_bytes(buf[9..17].try_into().unwrap());
-                let commit_number = usize::from_le_bytes(buf[17..25].try_into().unwrap());
-                let remainder = &buf[25..];
+                let op_number = usize::from_le_bytes(buf[9..17].try_into().unwrap());
+                let replica_id = usize::from_le_bytes(buf[17..25].try_into().unwrap());
+                let commit_number = usize::from_le_bytes(buf[25..33].try_into().unwrap());
+
+                let remainder = &buf[33..];
                 let log = parse_op_bytes(remainder);
                 Message::StartView {
                     view_number,
+                    op_number,
                     replica_id,
                     commit_number,
                     log,
@@ -227,16 +234,18 @@ impl Message<Op> {
             }
             Message::DoViewChange {
                 view_number,
+                op_number,
                 replica_id,
                 commit_number,
                 log,
             } => {
-                let length = 1 + 8 + 8 + 8 + log.len() * MAX_OP_SIZE;
+                let length = 1 + 8 + 8 + 8 + 8 + log.len() * MAX_OP_SIZE;
                 let mut bytes = Vec::with_capacity(length + 4);
                 let discriminator = 6u8;
                 bytes.extend_from_slice(&(length as u32).to_le_bytes());
                 bytes.extend_from_slice(&discriminator.to_le_bytes());
                 bytes.extend_from_slice(&view_number.to_le_bytes());
+                bytes.extend_from_slice(&op_number.to_le_bytes());
                 bytes.extend_from_slice(&replica_id.to_le_bytes());
                 bytes.extend_from_slice(&commit_number.to_le_bytes());
                 let op_bytes = log.iter().flat_map(|op| op.to_bytes());
@@ -245,16 +254,18 @@ impl Message<Op> {
             }
             Message::StartView {
                 view_number,
+                op_number,
                 replica_id,
                 commit_number,
                 log,
             } => {
-                let length = 1 + 8 + 8 + 8 + log.len() * MAX_OP_SIZE;
+                let length = 1 + 8 + 8 + 8 + 8 + log.len() * MAX_OP_SIZE;
                 let mut bytes = Vec::with_capacity(length);
                 let discriminator = 7u8;
                 bytes.extend_from_slice(&(length as u32).to_le_bytes());
                 bytes.extend_from_slice(&discriminator.to_le_bytes());
                 bytes.extend_from_slice(&view_number.to_le_bytes());
+                bytes.extend_from_slice(&op_number.to_le_bytes());
                 bytes.extend_from_slice(&replica_id.to_le_bytes());
                 bytes.extend_from_slice(&commit_number.to_le_bytes());
                 let op_bytes = log.iter().flat_map(|op| op.to_bytes());
@@ -274,12 +285,14 @@ mod tests {
 
     fn generate_start_view_message() -> Message<Op> {
         let view_number = 1;
-        let replica_id = 2;
-        let commit_number = 3;
+        let op_number = 2;
+        let replica_id = 3;
+        let commit_number = 4;
         let log = generate_log();
 
         Message::StartView {
             view_number,
+            op_number,
             replica_id,
             commit_number,
             log,
@@ -288,12 +301,14 @@ mod tests {
 
     fn generate_do_view_change_message() -> Message<Op> {
         let view_number = 1;
-        let replica_id = 2;
-        let commit_number = 3;
+        let op_number = 2;
+        let replica_id = 3;
+        let commit_number = 4;
         let log = generate_log();
 
         Message::DoViewChange {
             view_number,
+            op_number,
             replica_id,
             commit_number,
             log,
