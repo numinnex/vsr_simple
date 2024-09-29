@@ -58,7 +58,6 @@ fn main() {
 
 fn handle_connection(stream: &mut TcpStream, replica: Rc<Replica>) {
     loop {
-        let thread_id = std::thread::current();
         let mut init_buf = [0u8; 4];
         match stream.read_exact(&mut init_buf) {
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
@@ -74,9 +73,9 @@ fn handle_connection(stream: &mut TcpStream, replica: Rc<Replica>) {
 
         let mut buf = vec![0u8; len as _];
         stream.read_exact(&mut buf).unwrap();
-
         let message = Message::parse_message(&buf);
-        println!("{:?}, Received message: {:?}", thread_id, message);
+        println!("Received message: {:?}", message);
+
         replica.on_message(stream, message);
     }
 }

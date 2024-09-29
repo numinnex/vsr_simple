@@ -281,6 +281,7 @@ impl Replica {
         }
         if op_number > current_op_number + 1 {
             // Initiate state transfer
+            self.state_transfer();
             return;
         }
 
@@ -361,9 +362,13 @@ impl Replica {
         }
     }
 
+    fn state_transfer(&self) {
+        self.status.replace(Status::Recovery);
+    }
+
     fn ack_start_view_change(&self, view_number: usize) {
         let mut view_change_counter = self.view_change_counter.borrow_mut();
-        let count = view_change_counter
+        view_change_counter
             .entry(view_number)
             .and_modify(|v| *v += 1)
             .or_insert(1);
@@ -475,10 +480,8 @@ impl Replica {
         let mut view_snapshot = self.view_snapshot.borrow_mut();
         if let Some(snapshot) = &mut *view_snapshot {
             if view_number > snapshot.view_number {
-                // Replace ...
                 *snapshot = ViewSnapshot::new(view_number, op_number, commit_number, log);
             } else if op_number > snapshot.op_number {
-                // Replace ...
                 *snapshot = ViewSnapshot::new(view_number, op_number, commit_number, log);
             }
         } else {

@@ -8,6 +8,8 @@ use client::{Op, MAX_OP_SIZE};
 // 5 => StartViewChange
 // 6 => DoViewChange
 // 7 => StartView
+// 8 => GetState
+// 9 => NewState
 // TODO: Add variants to handle state transfers.
 
 #[derive(Debug, PartialEq)]
@@ -31,7 +33,17 @@ pub enum Message<Op: Clone> {
         view_number: usize,
         commit_number: usize,
     },
-    // TODO: Add variants to handle state tranfers.
+    GetState {
+        replica_id: usize,
+        view_number: usize,
+        op_number: usize,
+    },
+    NewState {
+        view_number: usize,
+        log: Vec<Op>,
+        op_number: usize,
+        commit_number: usize,
+    },
     StartViewChange {
         view_number: usize,
         replica_id: usize,
@@ -147,6 +159,16 @@ impl Message<Op> {
                     replica_id,
                     commit_number,
                     log,
+                }
+            },
+            8 => {
+                Message::GetState {
+
+                }
+            },
+            9 => {
+                Message::NewState {
+
                 }
             }
             _ => unreachable!(),
@@ -272,6 +294,8 @@ impl Message<Op> {
                 bytes.extend(op_bytes);
                 bytes
             }
+            Message::GetState { replica_id, view_number, op_number } => todo!(),
+            Message::NewState { view_number, log, op_number, commit_number } => todo!(),
         }
     }
 }
