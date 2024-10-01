@@ -70,8 +70,18 @@ impl Replica {
         }
     }
 
-    fn send_msg_to_primary(&self, message: Message<Op>) {}
+    fn send_msg_to_primary(&self, message: Message<Op>) {
+        todo!();
+    }
 
+    fn send_msg_to_replica(&self, replica_id: usize, message: Message<Op>) {
+        let addr = self.config.get_replica_address(replica_id);
+        let mut stream = TcpStream::connect(addr).unwrap();
+        let bytes = message.to_bytes();
+        stream
+            .write_all(&bytes)
+            .expect("Failed to send message to replica");
+    }
     // Couldn't be bothered creating proper connections cache, instead just connect everytime
     // a new request is being made to the replica.
     fn send_msg_to_replicas(&self, message: Message<Op>) {
@@ -227,6 +237,21 @@ impl Replica {
             } => {
                 self.on_start_view(view_number, op_number, replica_id, commit_number, log);
             }
+            Message::GetState {
+                replica_id,
+                view_number,
+                op_number,
+            } => {
+                self.on_get_state(replica_id, view_number, op_number);
+            }
+            Message::NewState {
+                view_number,
+                log,
+                op_number,
+                commit_number,
+            } => {
+                self.on_new_state(view_number, log, op_number, commit_number);
+            }
         }
     }
 }
@@ -364,6 +389,12 @@ impl Replica {
 
     fn state_transfer(&self) {
         self.status.replace(Status::Recovery);
+        let message = Message::GetState {
+            replica_id: self.id,
+            view_number: self.view_number(),
+            op_number: self.op_number(),
+        };
+        self.send_msg_to_primary(message);
     }
 
     fn ack_start_view_change(&self, view_number: usize) {
@@ -525,6 +556,35 @@ impl Replica {
                 log,
             };
             self.send_msg_to_replicas(message);
+        }
+    }
+    fn on_get_state(&self, replica_id: usize, view_number: usize, op_number: usize) {
+        let current_view_number = self.view_number();
+        if current_view_number != view_number {
+            return;
+        }
+        if *self.status.borrow() == Status::ViewChange {
+            return;
+        }
+        let log = self.log.borrow();
+        let message = Message::NewState {
+            view_number: current_view_number,
+            log: log[..op_number].to_owned(),
+            op_number: self.op_number(),
+            commit_number: self.commit_number(),
+        };
+        self.send_msg_to_replica(replica_id, message);
+    }
+    fn on_new_state(
+        &self,
+        view_number: usize,
+        log: Vec<Op>,
+        op_number: usize,
+        commit_number: usize,
+    ) {
+        assert_eq!(*self.status.borrow(), Status::Recovery);
+        if self.view_number() != view_number {
+            return;
         }
     }
 }

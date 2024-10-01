@@ -12,6 +12,10 @@ impl ReplicaConfig {
         self.replicas.push(id);
     }
 
+    pub fn get_replica_address(&self, replica_id: usize) -> SocketAddr {
+        self.addresses[replica_id]
+    }
+
     pub fn primary_id(&self, view_number: usize) -> usize {
         let idx = view_number % self.replicas.len();
         self.replicas[idx]

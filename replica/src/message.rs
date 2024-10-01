@@ -160,15 +160,28 @@ impl Message<Op> {
                     commit_number,
                     log,
                 }
-            },
+            }
             8 => {
+                let replica_id = usize::from_le_bytes(buf[1..9].try_into().unwrap());
+                let view_number = usize::from_le_bytes(buf[9..17].try_into().unwrap());
+                let op_number = usize::from_le_bytes(buf[17..25].try_into().unwrap());
                 Message::GetState {
-
+                    replica_id,
+                    view_number,
+                    op_number,
                 }
-            },
+            }
             9 => {
+                let view_number = usize::from_le_bytes(buf[1..9].try_into().unwrap());
+                let op_number = usize::from_le_bytes(buf[9..17].try_into().unwrap());
+                let commit_number = usize::from_le_bytes(buf[17..25].try_into().unwrap());
+                let remainder = &buf[25..];
+                let log = parse_op_bytes(buf);
                 Message::NewState {
-
+                    view_number,
+                    op_number,
+                    commit_number,
+                    log,
                 }
             }
             _ => unreachable!(),
@@ -294,8 +307,39 @@ impl Message<Op> {
                 bytes.extend(op_bytes);
                 bytes
             }
-            Message::GetState { replica_id, view_number, op_number } => todo!(),
-            Message::NewState { view_number, log, op_number, commit_number } => todo!(),
+            Message::GetState {
+                replica_id,
+                view_number,
+                op_number,
+            } => {
+                let length = 1 + 8 + 8 + 8;
+                let mut bytes = Vec::with_capacity(length);
+                let discriminator = 8u8;
+                bytes.extend_from_slice(&(length as u32).to_le_bytes());
+                bytes.extend_from_slice(&discriminator.to_le_bytes());
+                bytes.extend_from_slice(&replica_id.to_le_bytes());
+                bytes.extend_from_slice(&view_number.to_le_bytes());
+                bytes.extend_from_slice(&op_number.to_le_bytes());
+                bytes
+            }
+            Message::NewState {
+                view_number,
+                log,
+                op_number,
+                commit_number,
+            } => {
+                let length = 1 + 8 + 8 + 8 + log.len() * MAX_OP_SIZE;
+                let mut bytes = Vec::with_capacity(length);
+                let discriminator = 9u8;
+                bytes.extend_from_slice(&(length as u32).to_le_bytes());
+                bytes.extend_from_slice(&discriminator.to_le_bytes());
+                bytes.extend_from_slice(&view_number.to_le_bytes());
+                bytes.extend_from_slice(&op_number.to_le_bytes());
+                bytes.extend_from_slice(&commit_number.to_le_bytes());
+                let op_bytes = log.iter().flat_map(|op| op.to_bytes());
+                bytes.extend(op_bytes);
+                bytes
+            }
         }
     }
 }
