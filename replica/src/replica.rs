@@ -92,8 +92,8 @@ impl Replica {
             .0
             .expect("Failed to send message to replica");
     }
-    // Couldn't be bothered creating proper connections cache, instead just connect everytime
-    // a new request is being made to the replica.
+    // TODO: When connecting to other replica, check if the connection exists in cache,
+    // otherwise create it and insert to the connection cache.
     async fn send_msg_to_replicas(&self, message: Message<Op>) {
         for (replica_id, addr) in self
             .config
