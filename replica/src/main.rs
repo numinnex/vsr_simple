@@ -1,13 +1,12 @@
 use client::ADDRESSES;
 use message::Message;
+use monoio::{
+    io::AsyncReadRentExt,
+    net::{TcpListener, TcpStream},
+};
 use replica::Replica;
 use replica_config::ReplicaConfig;
-use std::{
-    io::Read,
-    net::{TcpListener, TcpStream},
-    rc::Rc,
-    time::Duration,
-};
+use std::{rc::Rc, time::Duration};
 
 const TWO_SECONDS: u64 = 2;
 
@@ -32,23 +31,29 @@ fn main() {
         let config = config.clone();
         let thread = builder
             .spawn(move || {
-                let replica = Rc::new(Replica::new(id, config));
-                println!("Created node with addr: {}, id: {}", addr, id);
-                let listener = TcpListener::bind(addr).expect("Failed to bind to socketerino");
-                loop {
-                    let replica = replica.clone();
-                    match listener.accept() {
-                        Ok((mut stream, _)) => {
-                            stream
-                                .set_read_timeout(Some(Duration::from_secs(TWO_SECONDS)))
-                                .unwrap();
-                            handle_connection(&mut stream, replica);
-                        }
-                        Err(e) => {
-                            eprintln!("Error when accepting incomming connection: {}", e);
+                let mut rt = monoio::RuntimeBuilder::<monoio::FusionDriver>::new()
+                    .with_entries(256)
+                    .enable_timer()
+                    .build()
+                    .unwrap();
+                rt.block_on(async {
+                    let replica = Rc::new(Replica::new(id, config));
+                    println!("Created node with addr: {}, id: {}", addr, id);
+                    let listener = TcpListener::bind(addr).expect("Failed to bind to socketerino");
+                    loop {
+                        let replica = replica.clone();
+                        match listener.accept().await {
+                            Ok((mut stream, _)) => {
+                                monoio::spawn(async move {
+                                    handle_connection(&mut stream, replica).await
+                                });
+                            }
+                            Err(e) => {
+                                eprintln!("Error when accepting incomming connection: {}", e);
+                            }
                         }
                     }
-                }
+                });
             })
             .unwrap();
         threads.push(thread);
@@ -56,26 +61,33 @@ fn main() {
     let _: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
 }
 
-fn handle_connection(stream: &mut TcpStream, replica: Rc<Replica>) {
+async fn handle_connection(stream: &mut TcpStream, replica: Rc<Replica>) {
     loop {
-        let mut init_buf = [0u8; 4];
-        match stream.read_exact(&mut init_buf) {
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                break;
+        let init_buf = vec![0u8; 4];
+        let read_fut = stream.read_exact(init_buf);
+        let result = monoio::time::timeout(Duration::from_secs(TWO_SECONDS), read_fut).await;
+        match result {
+            Ok(val) => {
+                let (res, init_buf) = val;
+                if let Err(e) = res {
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                        break;
+                    }
+                }
+                let len = u32::from_le_bytes(init_buf[..].try_into().unwrap());
+                let buf = vec![0u8; len as _];
+                let (res, buf) = stream.read_exact(buf).await;
+                res.unwrap();
+
+                let message = Message::parse_message(&buf);
+                println!("Received message: {:?}", message);
+                replica.on_message(message).await;
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                replica.on_timer();
-                continue;
+            Err(_) => {
+                let thread = std::thread::current();
+                println!("Ticking timer on thread: {:?}", thread);
+                replica.on_timer().await;
             }
-            _ => {}
         }
-        let len = u32::from_le_bytes(init_buf[..].try_into().unwrap());
-
-        let mut buf = vec![0u8; len as _];
-        stream.read_exact(&mut buf).unwrap();
-        let message = Message::parse_message(&buf);
-        println!("Received message: {:?}", message);
-
-        replica.on_message(stream, message);
     }
 }

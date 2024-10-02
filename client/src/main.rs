@@ -18,21 +18,19 @@ fn main() {
     let primary_addr = ADDRESSES[0];
     let mut stream = TcpStream::connect(primary_addr).unwrap();
     let mut request_num = 0;
-    /*
-    loop {
-        let client = &mut client;
-        let stream = &mut stream;
-        let value = generate_random_number();
-        let request = Request::new(client.id, request_num, Op::Add(value));
-        client.request_number = request_num;
-        request_num += 1;
+    //loop {
+    let client = &mut client;
+    let stream = &mut stream;
+    let value = generate_random_number();
+    let request = Request::new(client.id, request_num, Op::Add(value));
+    client.request_number = request_num;
+    request_num += 1;
 
-        let bytes = request.to_bytes();
-        let _ = stream.write(&bytes).unwrap();
-        // TODO: Read the response
-        thread::sleep(Duration::from_millis(1000));
-    }
-    */
+    let bytes = request.to_bytes();
+    let _ = stream.write(&bytes).unwrap();
+    // TODO: Read the response
+    thread::sleep(Duration::from_millis(1000));
+    //}
     loop {}
 }
 

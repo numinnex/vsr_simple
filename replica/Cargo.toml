@@ -6,6 +6,8 @@ default-run = "server"
 
 [dependencies]
 client = { path = "../client/" }
+monoio = "0.2.4"
+
 
 [[bin]]
 name = "server"

@@ -1,4 +1,5 @@
 use client::Op;
+use monoio::{io::AsyncWriteRentExt, net::TcpStream};
 
 use crate::{
     client_table::ClientTable, message::Message, replica_config::ReplicaConfig, status::Status,
@@ -7,8 +8,6 @@ use crate::{
 use std::{
     cell::RefCell,
     collections::HashMap,
-    io::{Read, Write},
-    net::TcpStream,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -70,21 +69,32 @@ impl Replica {
         }
     }
 
-    fn send_msg_to_primary(&self, message: Message<Op>) {
-        todo!();
-    }
-
-    fn send_msg_to_replica(&self, replica_id: usize, message: Message<Op>) {
-        let addr = self.config.get_replica_address(replica_id);
-        let mut stream = TcpStream::connect(addr).unwrap();
+    async fn send_msg_to_primary(&self, message: Message<Op>) {
+        let view_number = self.view_number();
+        let primary_id = self.config.primary_id(view_number);
+        let primary_addr = self.config.get_replica_address(primary_id);
+        let mut stream = TcpStream::connect(primary_addr).await.unwrap();
         let bytes = message.to_bytes();
         stream
-            .write_all(&bytes)
+            .write_all(bytes)
+            .await
+            .0
+            .expect("Failed to send message to replica");
+    }
+
+    async fn send_msg_to_replica(&self, replica_id: usize, message: Message<Op>) {
+        let addr = self.config.get_replica_address(replica_id);
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let bytes = message.to_bytes();
+        stream
+            .write_all(bytes)
+            .await
+            .0
             .expect("Failed to send message to replica");
     }
     // Couldn't be bothered creating proper connections cache, instead just connect everytime
     // a new request is being made to the replica.
-    fn send_msg_to_replicas(&self, message: Message<Op>) {
+    async fn send_msg_to_replicas(&self, message: Message<Op>) {
         for (replica_id, addr) in self
             .config
             .replicas
@@ -97,28 +107,12 @@ impl Replica {
                     message, replica_id
                 );
                 let bytes = message.to_bytes();
-                let mut stream = TcpStream::connect(addr).unwrap();
+                let mut stream = TcpStream::connect(addr).await.unwrap();
                 stream
-                    .write_all(&bytes)
+                    .write_all(bytes)
+                    .await
+                    .0
                     .expect("Failed to send message to replica");
-
-                let mut len_bytes = vec![0u8; 4];
-                stream
-                    .read_exact(&mut len_bytes)
-                    .expect("Failed to read response from replica.");
-                let length = u32::from_le_bytes(len_bytes.try_into().unwrap());
-                let mut buffer = vec![0u8; length as _];
-                stream
-                    .read_exact(&mut buffer)
-                    .expect("Failed to read response from replica.");
-                let message = Message::parse_message(&buffer);
-                let thread_id = std::thread::current();
-                println!(
-                    "{:?} Received message from replica: {:?}",
-                    thread_id, message
-                );
-
-                self.on_message(&mut stream, message);
             }
         }
     }
@@ -168,7 +162,7 @@ impl Replica {
         self.op_number.load(Ordering::Acquire)
     }
 
-    pub fn on_message(&self, stream: &mut TcpStream, message: Message<Op>) {
+    pub async fn on_message(&self, message: Message<Op>) {
         match message {
             Message::Request {
                 client_id,
@@ -178,7 +172,7 @@ impl Replica {
                 // Check if you are primary, otherwise drop the message.
                 // Increment op-number.
                 // Send `Prepare` message to other replicas.
-                self.on_request(client_id, request_number, op);
+                self.on_request(client_id, request_number, op).await;
             }
             Message::Prepare {
                 view_number,
@@ -190,7 +184,8 @@ impl Replica {
                 // Append to log.
                 // Update clients table.
                 // Send `PrepareOk` to primary.
-                self.on_prepare(stream, view_number, op_number, op, commit_number)
+                self.on_prepare(view_number, op_number, op, commit_number)
+                    .await
             }
             Message::PrepareOk {
                 view_number,
@@ -217,7 +212,7 @@ impl Replica {
                 view_number,
                 replica_id,
             } => {
-                self.on_start_view_change(view_number, replica_id);
+                self.on_start_view_change(view_number, replica_id).await;
             }
             Message::DoViewChange {
                 view_number,
@@ -226,7 +221,8 @@ impl Replica {
                 commit_number,
                 log,
             } => {
-                self.on_do_view_change(view_number, op_number, replica_id, commit_number, log);
+                self.on_do_view_change(view_number, op_number, replica_id, commit_number, log)
+                    .await;
             }
             Message::StartView {
                 view_number,
@@ -242,7 +238,7 @@ impl Replica {
                 view_number,
                 op_number,
             } => {
-                self.on_get_state(replica_id, view_number, op_number);
+                self.on_get_state(replica_id, view_number, op_number).await;
             }
             Message::NewState {
                 view_number,
@@ -250,7 +246,8 @@ impl Replica {
                 op_number,
                 commit_number,
             } => {
-                self.on_new_state(view_number, log, op_number, commit_number);
+                self.on_new_state(view_number, log, op_number, commit_number)
+                    .await;
             }
         }
     }
@@ -258,7 +255,7 @@ impl Replica {
 
 // Handlers
 impl Replica {
-    fn on_request(&self, client_id: usize, request_number: usize, op: Op) {
+    async fn on_request(&self, client_id: usize, request_number: usize, op: Op) {
         assert!(self.is_primary());
         if *self.status.borrow() != Status::Normal {
             // TODO: Impl mechanism that teaches client to try again later on.
@@ -282,17 +279,10 @@ impl Replica {
             op_number,
             commit_number,
         };
-        self.send_msg_to_replicas(message);
+        self.send_msg_to_replicas(message).await;
     }
 
-    fn on_prepare(
-        &self,
-        stream: &mut TcpStream,
-        view_number: usize,
-        op_number: usize,
-        op: Op,
-        commit_number: usize,
-    ) {
+    async fn on_prepare(&self, view_number: usize, op_number: usize, op: Op, commit_number: usize) {
         self.backup_idle_ticks.store(0, Ordering::Relaxed);
         assert!(!self.is_primary());
         if self.view_number() != view_number {
@@ -306,7 +296,7 @@ impl Replica {
         }
         if op_number > current_op_number + 1 {
             // Initiate state transfer
-            self.state_transfer();
+            self.state_transfer().await;
             return;
         }
 
@@ -322,13 +312,10 @@ impl Replica {
             op_number: self.op_number.load(Ordering::Acquire),
         };
         println!(
-            "Sending message: {:?} to replica as response for prepare message",
+            "Sending message: {:?} to primary as response for prepare message",
             message
         );
-        let bytes = message.to_bytes();
-        stream
-            .write_all(&bytes)
-            .expect("Failed to send PrepareOk back to leader");
+        self.send_msg_to_primary(message).await;
     }
 
     fn on_prepare_ok(&self, view_number: usize, op_number: usize) {
@@ -367,34 +354,37 @@ impl Replica {
         }
     }
 
-    pub fn on_timer(&self) {
+    pub async fn on_timer(&self) {
         if self.is_primary() {
             // Send the `Commit` message to our backups.
             let view_number = self.view_number();
             let commit_number = self.commit_number();
+            /*
             let message = Message::Commit {
                 view_number,
                 commit_number,
             };
 
             self.send_msg_to_replicas(message);
+            */
         } else {
             let idle_ticks = self.backup_idle_ticks.fetch_add(1, Ordering::Relaxed);
             if idle_ticks > 0 {
+                println!("Tick twice");
                 // Send the `StartViewChange` message to other backups.
-                self.view_change();
+                self.view_change().await;
             }
         }
     }
 
-    fn state_transfer(&self) {
+    async fn state_transfer(&self) {
         self.status.replace(Status::Recovery);
         let message = Message::GetState {
             replica_id: self.id,
             view_number: self.view_number(),
             op_number: self.op_number(),
         };
-        self.send_msg_to_primary(message);
+        self.send_msg_to_primary(message).await;
     }
 
     fn ack_start_view_change(&self, view_number: usize) {
@@ -422,7 +412,7 @@ impl Replica {
         self.set_view_change_status();
     }
 
-    fn view_change(&self) {
+    async fn view_change(&self) {
         let current_view_number = self.view_number.load(Ordering::Acquire);
         let view_number = (current_view_number + 1) % self.number_of_replicas();
         self.enter_start_view_change_stage(view_number);
@@ -431,7 +421,7 @@ impl Replica {
             view_number,
             replica_id: self.id,
         };
-        self.send_msg_to_replicas(message);
+        self.send_msg_to_replicas(message).await;
     }
 
     fn on_start_view(
@@ -458,7 +448,7 @@ impl Replica {
         }
     }
 
-    fn on_start_view_change(&self, view_number: usize, replica_id: usize) {
+    async fn on_start_view_change(&self, view_number: usize, replica_id: usize) {
         assert!(self.id != replica_id);
         if view_number > self.view_number() {
             self.set_view_change_status();
@@ -470,7 +460,7 @@ impl Replica {
                 replica_id: self.id,
             };
             // Send the message to ourselves..
-            self.send_msg_to_replicas(message);
+            self.send_msg_to_replicas(message).await;
         }
         // Ack the incomming `StartViewChange`
         self.ack_start_view_change(view_number);
@@ -488,11 +478,11 @@ impl Replica {
                 replica_id: self.id,
                 log,
             };
-            self.send_msg_to_primary(message);
+            self.send_msg_to_primary(message).await;
         }
     }
 
-    fn on_do_view_change(
+    async fn on_do_view_change(
         &self,
         view_number: usize,
         op_number: usize,
@@ -555,10 +545,11 @@ impl Replica {
                 replica_id: self.id,
                 log,
             };
-            self.send_msg_to_replicas(message);
+            self.send_msg_to_replicas(message).await;
         }
     }
-    fn on_get_state(&self, replica_id: usize, view_number: usize, op_number: usize) {
+
+    async fn on_get_state(&self, replica_id: usize, view_number: usize, op_number: usize) {
         let current_view_number = self.view_number();
         if current_view_number != view_number {
             return;
@@ -566,6 +557,7 @@ impl Replica {
         if *self.status.borrow() == Status::ViewChange {
             return;
         }
+
         let log = self.log.borrow();
         let message = Message::NewState {
             view_number: current_view_number,
@@ -573,9 +565,10 @@ impl Replica {
             op_number: self.op_number(),
             commit_number: self.commit_number(),
         };
-        self.send_msg_to_replica(replica_id, message);
+        self.send_msg_to_replica(replica_id, message).await;
     }
-    fn on_new_state(
+
+    async fn on_new_state(
         &self,
         view_number: usize,
         log: Vec<Op>,
@@ -586,5 +579,22 @@ impl Replica {
         if self.view_number() != view_number {
             return;
         }
+
+        for op in log {
+            self.append_to_log(op);
+        }
+        for op_number in self.commit_number()..commit_number {
+            self.commit_op(op_number);
+        }
+        assert_eq!(self.op_number(), op_number);
+        assert_eq!(self.commit_number(), commit_number);
+        self.status.replace(Status::Normal);
+
+        let view_number = self.view_number();
+        let message = Message::PrepareOk {
+            op_number,
+            view_number,
+        };
+        self.send_msg_to_primary(message).await;
     }
 }
