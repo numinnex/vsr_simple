@@ -7,8 +7,11 @@ use crate::{
 };
 use std::{
     cell::RefCell,
-    collections::HashMap,
-    sync::atomic::{AtomicUsize, Ordering},
+    collections::{hash_map::Entry, HashMap},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    },
 };
 
 struct ViewSnapshot<Op> {
@@ -41,7 +44,8 @@ pub struct Replica {
     pub commit_number: AtomicUsize,
 
     // Used during view change to choose the new best log.
-    view_snapshot: RefCell<Option<ViewSnapshot<Op>>>,
+    view_snapshot: Mutex<Option<ViewSnapshot<Op>>>,
+    connections_cache: Mutex<HashMap<usize, TcpStream>>,
     acks: RefCell<HashMap<usize, usize>>,
     backup_idle_ticks: AtomicUsize,
     view_change_counter: RefCell<HashMap<usize, usize>>,
@@ -61,6 +65,7 @@ impl Replica {
             op_number: Default::default(),
             commit_number: Default::default(),
             view_snapshot: Default::default(),
+            connections_cache: Default::default(),
             acks: Default::default(),
             backup_idle_ticks: Default::default(),
             view_change_counter: Default::default(),
@@ -83,6 +88,10 @@ impl Replica {
     }
 
     async fn send_msg_to_replica(&self, replica_id: usize, message: Message<Op>) {
+        println!(
+            "Sending message: {:?} to replica with id: {}",
+            message, replica_id
+        );
         let addr = self.config.get_replica_address(replica_id);
         let mut stream = TcpStream::connect(addr).await.unwrap();
         let bytes = message.to_bytes();
@@ -106,13 +115,28 @@ impl Replica {
                     "Sending message: {:?} to replica with id: {}",
                     message, replica_id
                 );
-                let bytes = message.to_bytes();
-                let mut stream = TcpStream::connect(addr).await.unwrap();
-                stream
-                    .write_all(bytes)
-                    .await
-                    .0
-                    .expect("Failed to send message to replica");
+                let mut connections = self.connections_cache.lock().unwrap();
+                match connections.entry(*replica_id) {
+                    Entry::Occupied(mut conn) => {
+                        let stream = conn.get_mut();
+                        let bytes = message.to_bytes();
+                        stream
+                            .write_all(bytes)
+                            .await
+                            .0
+                            .expect("Failed to send message to replica");
+                    }
+                    Entry::Vacant(entry) => {
+                        let mut stream = TcpStream::connect(addr).await.unwrap();
+                        let bytes = message.to_bytes();
+                        stream
+                            .write_all(bytes)
+                            .await
+                            .0
+                            .expect("Failed to send message to replica");
+                        entry.insert(stream);
+                    }
+                }
             }
         }
     }
@@ -370,7 +394,6 @@ impl Replica {
         } else {
             let idle_ticks = self.backup_idle_ticks.fetch_add(1, Ordering::Relaxed);
             if idle_ticks > 0 {
-                println!("Tick twice");
                 // Send the `StartViewChange` message to other backups.
                 self.view_change().await;
             }
@@ -388,8 +411,8 @@ impl Replica {
     }
 
     fn ack_start_view_change(&self, view_number: usize) {
-        let mut view_change_counter = self.view_change_counter.borrow_mut();
-        view_change_counter
+        self.view_change_counter
+            .borrow_mut()
             .entry(view_number)
             .and_modify(|v| *v += 1)
             .or_insert(1);
@@ -432,6 +455,7 @@ impl Replica {
         commit_number: usize,
         log: Vec<Op>,
     ) {
+        println!("Started new view: {}, for replica: {}", view_number, self.id);
         self.status.replace(Status::Normal);
         self.set_view_number(view_number);
         self.set_op_number(op_number);
@@ -454,20 +478,11 @@ impl Replica {
             self.set_view_change_status();
             // Ack our own `StartViewChange`
             self.ack_start_view_change(view_number);
-            // Broadcast the `StartViewChange` message to other backups.
-            let message = Message::StartViewChange {
-                view_number,
-                replica_id: self.id,
-            };
-            // Send the message to ourselves..
-            self.send_msg_to_replicas(message).await;
         }
         // Ack the incomming `StartViewChange`
         self.ack_start_view_change(view_number);
 
-        let view_change_counter = self.view_change_counter.borrow();
-        let start_view_changes = view_change_counter.get(&view_number).unwrap();
-        if *start_view_changes >= self.quorum() {
+        if *self.view_change_counter.borrow().get(&view_number).unwrap() >= self.quorum() {
             // Send message to new primary.
             let log = self.log.borrow().clone();
             let op_number = self.op_number();
@@ -478,7 +493,7 @@ impl Replica {
                 replica_id: self.id,
                 log,
             };
-            self.send_msg_to_primary(message).await;
+            self.send_msg_to_replica(view_number, message).await;
         }
     }
 
@@ -490,15 +505,11 @@ impl Replica {
         commit_number: usize,
         log: Vec<Op>,
     ) {
-        assert!(*self.status.borrow() != Status::Normal);
-        let mut do_view_change_counter = self.do_view_change_counter.borrow_mut();
-        let do_views = do_view_change_counter
-            .entry(view_number)
-            .and_modify(|v| *v += 1)
-            .or_insert(1);
-
+        if *self.status.borrow() == Status::Normal {
+            return;
+        }
         // Store the best candidate for log transplant.
-        let mut view_snapshot = self.view_snapshot.borrow_mut();
+        let mut view_snapshot = self.view_snapshot.lock().unwrap();
         if let Some(snapshot) = &mut *view_snapshot {
             if view_number > snapshot.view_number {
                 *snapshot = ViewSnapshot::new(view_number, op_number, commit_number, log);
@@ -513,12 +524,20 @@ impl Replica {
                 log,
             ));
         }
+        drop(view_snapshot);
 
-        if *do_views >= self.quorum() {
-            assert!(self.view_snapshot.borrow().is_some());
+        if *self
+            .do_view_change_counter
+            .borrow_mut()
+            .entry(view_number)
+            .and_modify(|v| *v += 1)
+            .or_insert(1)
+            >= self.quorum()
+        {
+            println!("Starting new view...");
+            assert!(self.view_snapshot.lock().unwrap().is_some());
             // Take log from the most up to date replica.
-            let mut snapshot = self.view_snapshot.borrow_mut();
-            let snapshot = snapshot.take().unwrap();
+            let snapshot = self.view_snapshot.lock().unwrap().take().unwrap();
             let log = snapshot.log;
             let commit_number = snapshot.commit_number;
             let op_number = snapshot.op_number;
