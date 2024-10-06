@@ -77,14 +77,29 @@ impl Replica {
     async fn send_msg_to_primary(&self, message: Message<Op>) {
         let view_number = self.view_number();
         let primary_id = self.config.primary_id(view_number);
-        let primary_addr = self.config.get_replica_address(primary_id);
-        let mut stream = TcpStream::connect(primary_addr).await.unwrap();
-        let bytes = message.to_bytes();
-        stream
-            .write_all(bytes)
-            .await
-            .0
-            .expect("Failed to send message to replica");
+        let mut connections = self.connections_cache.lock().unwrap();
+        match connections.entry(primary_id) {
+            Entry::Occupied(mut conn) => {
+                let stream = conn.get_mut();
+                let bytes = message.to_bytes();
+                stream
+                    .write_all(bytes)
+                    .await
+                    .0
+                    .expect("Failed to send message to replica");
+            }
+            Entry::Vacant(entry) => {
+                let addr = self.config.get_replica_address(primary_id);
+                let mut stream = TcpStream::connect(addr).await.unwrap();
+                let bytes = message.to_bytes();
+                stream
+                    .write_all(bytes)
+                    .await
+                    .0
+                    .expect("Failed to send message to replica");
+                entry.insert(stream);
+            }
+        }
     }
 
     async fn send_msg_to_replica(&self, replica_id: usize, message: Message<Op>) {
@@ -92,14 +107,30 @@ impl Replica {
             "Sending message: {:?} to replica with id: {}",
             message, replica_id
         );
-        let addr = self.config.get_replica_address(replica_id);
-        let mut stream = TcpStream::connect(addr).await.unwrap();
-        let bytes = message.to_bytes();
-        stream
-            .write_all(bytes)
-            .await
-            .0
-            .expect("Failed to send message to replica");
+        let mut connections = self.connections_cache.lock().unwrap();
+        match connections.entry(*replica_id) {
+            Entry::Occupied(mut conn) => {
+                let stream = conn.get_mut();
+                let bytes = message.to_bytes();
+                stream
+                    .write_all(bytes)
+                    .await
+                    .0
+                    .expect("Failed to send message to replica");
+            }
+            Entry::Vacant(entry) => {
+                let addr = self.config.get_replica_address(replica_id);
+                let mut stream = TcpStream::connect(addr).await.unwrap();
+                let bytes = message.to_bytes();
+                stream
+                    .write_all(bytes)
+                    .await
+                    .0
+                    .expect("Failed to send message to replica");
+                entry.insert(stream);
+            }
+        }
+    }
     }
     // TODO: When connecting to other replica, check if the connection exists in cache,
     // otherwise create it and insert to the connection cache.
