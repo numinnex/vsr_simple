@@ -2,4 +2,5 @@ Simple implementation of the `Viewstamped Replication` protocol, using `Tcp` as 
 
 
 ## TODO
+- Implement the recovery protocol.
 - Maybe implement the simulator aswell.
